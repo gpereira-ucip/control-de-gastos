@@ -153,3 +153,8 @@ Orden de trabajo: de arriba hacia abajo. Cada corrida hace 1 a 3 ítems según s
 - 2026-11-10 — v1.1: ítems 1 (VERSION + Novedades con aviso), 2 (schemaVersion + migraciones, copia pre-migración, respaldos versionados y migrados al restaurar) y 9 (`tests.py`: flujo en 390x844 y 1280x900, claro/oscuro, sin scroll horizontal, tildar pago, cargar movimiento, cerrar mes, migración desde datos v1.0, primera instalación). Todas las pruebas OK.
 - 2026-11-09 — Se crea este documento con la hoja de ruta de 100 mejoras y la tarea diaria de la mañana.
 - 2026-11-06 — v1.0: rediseño completo (resumen, categorías, vencimientos, movimientos, historial con gráfico, respaldo, CSV, tema oscuro).
+
+
+## Instalación en el teléfono (14/11/2026)
+- `manifest.json`, `icon-192.png`, `icon-512.png` y `sw.js` permiten instalar la app con su ícono desde la dirección de GitHub Pages. No los borres ni quites las etiquetas `<link rel="manifest">`, ícono y el registro de `sw.js` del `<head>` de index.html.
+- `sw.js` no guarda caché a propósito: así Gonzalo ve siempre la última mejora diaria.

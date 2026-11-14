@@ -1,3 +1,5 @@
 __pycache__/
 *.png
 capturas/
+!icon-192.png
+!icon-512.png
