@@ -162,3 +162,5 @@ Orden de trabajo: de arriba hacia abajo. Cada corrida hace 1 a 3 ítems según s
 
 ## Publicación (14/11/2026)
 - La dirección https://gpereira-ucip.github.io/control-de-gastos/ se publica desde la rama gh-pages. El workflow `.github/workflows/publicar.yml` copia main a gh-pages solo en cada push: no lo borres ni toques gh-pages a mano.
+
+- 14/11/2026 · v1.2 (pedido de Gonzalo): en Resumen, «Gastos del mes» muestra todos los gastos fijos (sin «Ver todos») y lo tildado queda tildado en su lugar; sigue apareciendo en «Pagados».

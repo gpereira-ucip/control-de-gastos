@@ -253,8 +253,12 @@ button{cursor:pointer}
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '1.1';
+const VERSION = '1.2';
 const CHANGELOG = [
+  {v:'1.2', fecha:'14 nov 2026', items:[
+    'En el Resumen, «Gastos del mes» muestra la lista completa, sin tocar «Ver todos».',
+    'Al tildar un gasto como pagado queda tildado en su lugar (no desaparece), así la lista sirve de checklist. También aparece en «Pagados».'
+  ]},
   {v:'1.1', fecha:'10 nov 2026', items:[
     'Nueva pantalla «Novedades» en el menú: acá vas a ver qué cambió en cada versión.',
     'Los datos guardados ahora tienen número de esquema y un sistema de migraciones: las próximas versiones van a poder cambiar la estructura sin perder nada.',
@@ -533,12 +537,13 @@ function donut(t){
   </div>`;
 }
 function viewResumen(t){
-  const pend = config.gastos.filter(x=>!current.gastos[x.id].pagado)
-    .sort((a,b)=>(Number(a.vence)||99)-(Number(b.vence)||99)).slice(0,5);
+  /* Checklist del mes (pedido de Gonzalo, 14/11/2026): se ven todos los gastos fijos y lo tildado queda tildado en su lugar. */
+  const lista = [...config.gastos].sort((a,b)=>(Number(a.vence)||99)-(Number(b.vence)||99));
   return `<div class="grid">
     <div class="card"><div class="card-h"><h2>¿En qué se va la plata?</h2><span class="sub">${esc(current.mesLabel)}</span></div>${donut(t)}</div>
-    <div class="card"><div class="card-h"><h2>Pendientes de pago</h2><button class="link" data-act="tab" data-tab="fijos">Ver todos</button></div>
-      ${pend.length? pend.map(gastoRow).join('') : `<div class="empty"><b>¡Todo pagado!</b>No quedan gastos fijos pendientes este mes.</div>`}</div>
+    <div class="card"><div class="card-h"><h2>Gastos del mes</h2><span class="sub">${t.nPag} de ${t.nFijos} pagados</span></div>
+      ${lista.length? lista.map(gastoRow).join('') : `<div class="empty"><b>Sin gastos fijos</b>Agregalos desde «Gastos fijos».</div>`}
+      ${lista.length && t.nPag===t.nFijos? `<div class="empty"><b>¡Todo pagado!</b>No quedan gastos fijos pendientes este mes.</div>` : ''}</div>
   </div>
   <div class="card" style="margin-top:16px"><div class="card-h"><h2>Ingresos</h2><span class="sub">Cobrado ${money(t.cobrado)} de ${money(t.ingresos)}</span></div>
     ${config.ingresos.map(ingresoRow).join('')}
