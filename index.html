@@ -253,8 +253,13 @@ button{cursor:pointer}
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '1.2';
+const VERSION = '1.3';
 const CHANGELOG = [
+  {v:'1.3', fecha:'16 nov 2026', items:[
+    'Tus datos ahora se guardan por duplicado en el navegador: en la base interna (IndexedDB, con mucho más espacio, lista para los comprobantes que vienen) y en el almacenamiento local de siempre.',
+    'Si una de las dos copias se borra o falla, la app se recupera sola con la otra al abrirse, y te avisa.',
+    'En el menú de Opciones podés ver si la doble copia está activa en este dispositivo.'
+  ]},
   {v:'1.2', fecha:'14 nov 2026', items:[
     'En el Resumen, «Gastos del mes» muestra la lista completa, sin tocar «Ver todos».',
     'Al tildar un gasto como pagado queda tildado en su lugar (no desaparece), así la lista sirve de checklist. También aparece en «Pagados».'
@@ -335,19 +340,85 @@ function newMonth(config, mesLabel){
   return {mesLabel, gastos:g, ingresos:i, movimientos:[]};
 }
 
-/* ---------- Almacenamiento (compatible con la versión anterior) ---------- */
+/* ---------- Almacenamiento (desde v1.3: IndexedDB + espejo en localStorage) ----------
+   Cada guardado escribe en las dos copias y deja una marca 'rev' (fecha en ms).
+   Al abrir, gana la copia con 'rev' más nueva (empate o sin marcas: localStorage, la de siempre),
+   y la otra se vuelve a sincronizar. Si IndexedDB no está disponible, se sigue solo con localStorage. */
 const PREFIX = 'control-mensual:';
+const IDB_NAME = 'control-mensual', IDB_STORE = 'kv';
+const store = {cache:{}, idb:null, modo:'local', recuperado:null};
+function idbOpen(){
+  return new Promise(res=>{
+    let done=false; const fin=v=>{ if(!done){ done=true; res(v); } };
+    setTimeout(()=>fin(null), 2500);
+    try{
+      if(!window.indexedDB) return fin(null);
+      const rq=indexedDB.open(IDB_NAME,1);
+      rq.onupgradeneeded=()=>{ try{ rq.result.createObjectStore(IDB_STORE); }catch(e){} };
+      rq.onsuccess=()=>{ const db=rq.result; db.onversionchange=()=>{ db.close(); store.idb=null; }; if(done) db.close(); fin(db); };
+      rq.onerror=()=>fin(null); rq.onblocked=()=>fin(null);
+    }catch(e){ fin(null); }
+  });
+}
+function idbAll(db){
+  return new Promise(res=>{
+    try{
+      const out={}, tx=db.transaction(IDB_STORE,'readonly'), os=tx.objectStore(IDB_STORE), rq=os.openCursor();
+      rq.onsuccess=()=>{ const c=rq.result; if(c){ out[c.key]=c.value; c.continue(); } };
+      tx.oncomplete=()=>res(out); tx.onerror=tx.onabort=()=>res(null);
+    }catch(e){ res(null); }
+  });
+}
+function idbPut(entries){
+  const db=store.idb; if(!db) return Promise.resolve(false);
+  return new Promise(res=>{
+    try{
+      const tx=db.transaction(IDB_STORE,'readwrite'), os=tx.objectStore(IDB_STORE);
+      for(const [k,v] of entries) os.put(v,k);
+      tx.oncomplete=()=>res(true); tx.onerror=tx.onabort=()=>res(false);
+    }catch(e){ res(false); }
+  });
+}
+function lsGet(key){ try{ return localStorage.getItem(PREFIX+key); }catch(e){ return null; } }
+function lsSet(key,value){ try{ localStorage.setItem(PREFIX+key,value); return true; }catch(e){ return false; } }
+function lsKeys(){ const r=[]; try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k&&k.startsWith(PREFIX)) r.push(k.slice(PREFIX.length)); } }catch(e){} return r; }
+async function storeInit(){
+  if (typeof window.storage !== 'undefined') return;
+  const ls={}; lsKeys().forEach(k=>{ ls[k]=lsGet(k); });
+  const db=await idbOpen(); let idb=null;
+  if(db){ idb=await idbAll(db); if(idb){ store.idb=db; store.modo='doble'; } else { try{ db.close(); }catch(e){} } }
+  const revLs=Number(ls.rev)||0, revIdb=Number(idb?.rev)||0;
+  const usarIdb = idb && revIdb > revLs;
+  const src = usarIdb ? idb : ls;
+  store.cache = {...src};
+  if(usarIdb){
+    const tieneDatos = k=>!!ls[k];
+    store.recuperado = ['config','current','history'].some(tieneDatos) ? 'idb-mas-nueva' : 'local-vacio';
+    for(const [k,v] of Object.entries(idb)) if(typeof v==='string') lsSet(k,v);
+  } else if(store.idb){
+    // Sincronizar la base interna con lo que hay en localStorage (incluye la primera vez desde v1.2).
+    const ent=Object.entries(ls).filter(([k,v])=>typeof v==='string');
+    if(ent.length) await idbPut(ent);
+  }
+}
 async function storeGet(key){
   if (typeof window.storage !== 'undefined'){
     try{ const r = await window.storage.get(key,false); return r ? r.value : null; }catch(e){ return null; }
   }
-  try{ return localStorage.getItem(PREFIX+key); }catch(e){ return null; }
+  if(key in store.cache) return store.cache[key];
+  return lsGet(key);
 }
-async function storeSet(key, value){
+async function storeSet(key, value){ return storeSetMany([[key,value]]); }
+async function storeSetMany(entries){
   if (typeof window.storage !== 'undefined'){
-    try{ await window.storage.set(key,value,false); return; }catch(e){}
+    for(const [k,v] of entries){ try{ await window.storage.set(k,v,false); }catch(e){} }
+    return;
   }
-  try{ localStorage.setItem(PREFIX+key,value); }catch(e){}
+  const rev=String(Date.now()); entries=[...entries,['rev',rev]];
+  let okLs=true;
+  for(const [k,v] of entries){ store.cache[k]=v; if(!lsSet(k,v)) okLs=false; }
+  if(!okLs) lsSet('rev','0'); // si el espejo local quedó incompleto, que no le gane a IndexedDB
+  if(store.idb){ const ok=await idbPut(entries); if(!ok){ store.modo='local'; } }
 }
 
 let config, current, hist;
@@ -385,6 +456,7 @@ function normalize(){
   if(!Array.isArray(hist)) hist=[];
 }
 async function load(){
+  try{ await storeInit(); }catch(e){}
   const raw={config:await storeGet('config'), current:await storeGet('current'), history:await storeGet('history')};
   const hadData = !!(raw.config||raw.current||raw.history);
   let meta={}; try{ meta=JSON.parse(await storeGet('meta')||'{}')||{}; }catch(e){ meta={}; }
@@ -412,9 +484,7 @@ async function marcarNovedadesVistas(){
   ui.novedad=false; render();
 }
 async function saveAll(){
-  await storeSet('config',JSON.stringify(config));
-  await storeSet('current',JSON.stringify(current));
-  await storeSet('history',JSON.stringify(hist));
+  await storeSetMany([['config',JSON.stringify(config)],['current',JSON.stringify(current)],['history',JSON.stringify(hist)]]);
 }
 
 /* ---------- Cálculos ---------- */
@@ -767,6 +837,7 @@ function sheetMenu(){
     it('reset','reset','Reiniciar mes actual','Vaciar montos reales y movimientos')+
     it('novedades','spark','Novedades'+(ui.novedad?'<span class="badge-new">NUEVO</span>':''),'Qué cambió en la versión '+VERSION)+
     `<p style="font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:center;margin:14px 4px 0">${svg('lock','').replace('<svg','<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"')} Tus datos se guardan solo en este dispositivo. Descargá un respaldo de vez en cuando.</p>
+    <p class="store-status" style="font-size:12px;color:var(--muted);margin:6px 4px 0">${store.modo==='doble'?'✓ Doble copia activa en este navegador (base interna + almacenamiento local).':(typeof window.storage!=='undefined'?'Guardado en el almacenamiento de la app.':'Copia única en el almacenamiento local: este navegador no permite la base interna.')}</p>
     <p class="ver-foot">Control Mensual · versión ${VERSION} · datos esquema ${SCHEMA_VERSION}</p>`});
 }
 
@@ -824,6 +895,8 @@ matchMedia('(max-width:720px)').addEventListener?.('change',()=>render());
 (async()=>{
   try{ await load(); }catch(e){ config=DEFAULT_CONFIG(); current=newMonth(config,nowLabel()); hist=[]; normalize(); }
   render();
+  if(store.recuperado==='local-vacio') toast('Recuperamos tus datos desde la copia interna');
+  else if(store.recuperado==='idb-mas-nueva') toast('Se usó la copia interna, que era la más reciente');
 })();
 </script>
 </body>

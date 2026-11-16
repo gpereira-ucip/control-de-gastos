@@ -8,6 +8,8 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
   - recorrer pestañas, tildar un pago, cargar un movimiento, cerrar un mes
   - migración: datos con formato v1.0 (sin esquema) se leen sin perder nada
   - novedades / versión
+  - (v1.3) doble copia IndexedDB + localStorage: espejo, recuperación si se borra localStorage,
+    gana la copia más nueva, datos v1.2 (solo localStorage) pasan a IndexedDB sin pérdida
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -44,10 +46,12 @@ def new_page(b, w, h, theme=None, seed=None):
     page.on('pageerror', lambda e: errs.append(str(e)))
     page.on('dialog', lambda d: (errs.append('dialog nativo: ' + d.message), d.dismiss()))
     page.goto(URL)
+    page.wait_for_selector('.hero')  # que termine la primera carga antes de sembrar datos
     if seed is not None or theme:
-        page.evaluate("""([seed, theme, P]) => { localStorage.clear();
+        page.evaluate("""([seed, theme, P]) => new Promise(res => { localStorage.clear();
             if (seed) for (const [k, v] of Object.entries(seed)) localStorage.setItem(P + k, JSON.stringify(v));
-            if (theme) localStorage.setItem(P + 'theme', theme); }""", [seed, theme, P])
+            if (theme) localStorage.setItem(P + 'theme', theme);
+            const rq = indexedDB.deleteDatabase('control-mensual'); rq.onsuccess = rq.onerror = rq.onblocked = () => res(true); })""", [seed, theme, P])
         page.reload()
     page.wait_for_selector('.hero')
     return ctx, page, errs
@@ -127,6 +131,69 @@ def migracion(b):
     check(not errs, f'migración sin errores {errs}')
     ctx.close()
 
+IDB_READ = """(k) => new Promise(res => { const rq = indexedDB.open('control-mensual');
+  rq.onsuccess = () => { const db = rq.result; try { const g = db.transaction('kv').objectStore('kv').get(k);
+    g.onsuccess = () => { db.close(); res(g.result ?? null); }; g.onerror = () => { db.close(); res(null); }; }
+    catch (e) { db.close(); res(null); } }; rq.onerror = () => res(null); })"""
+IDB_WRITE = """([k, v]) => new Promise(res => { const rq = indexedDB.open('control-mensual');
+  rq.onsuccess = () => { const db = rq.result; const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k);
+    tx.oncomplete = () => { db.close(); res(true); }; }; })"""
+
+def doble_copia(b):
+    print('\n== Doble copia IndexedDB + localStorage (v1.3)')
+    # 1) Datos de la v1.2 (solo localStorage, esquema 1) pasan a IndexedDB sin pérdida
+    V12 = json.loads(json.dumps(V10)); V12['meta'] = {'schemaVersion': 1, 'appVersion': '1.2', 'vistoNovedades': ['1.2']}
+    V12['config']['gastos'][1]['categoria'] = 'hogar'
+    ctx, page, errs = new_page(b, 390, 844, seed=V12)
+    idb_cur = page.evaluate(IDB_READ, 'current')
+    check(idb_cur and json.loads(idb_cur)['movimientos'][0]['monto'] == 35000, 'datos v1.2 copiados a IndexedDB')
+    check(json.loads(page.evaluate(IDB_READ, 'history'))[0]['ahorro'] == 200000, 'historial copiado a IndexedDB')
+    check(page.evaluate(IDB_READ, 'rev') == page.evaluate(f"localStorage.getItem('{P}rev')"), 'marca rev igual en las dos copias')
+    page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet')
+    check('Doble copia activa' in page.inner_text('.store-status'), 'menú muestra doble copia activa')
+    page.screenshot(path=str(SHOTS / 'menu-doble-copia.png'))
+    page.keyboard.press('Escape'); page.wait_for_timeout(100)
+    # 2) Un cambio se escribe en las dos
+    page.click('.nav [data-tab=movimientos]')
+    page.fill('#mov-form [name=desc]', 'Verdulería'); page.fill('#mov-form [name=monto]', '4.321')
+    page.click('#mov-form button'); page.wait_for_timeout(200)
+    check(any(m['monto'] == 4321 for m in json.loads(page.evaluate(IDB_READ, 'current'))['movimientos']), 'movimiento nuevo también en IndexedDB')
+    # 3) Se borra localStorage: al reabrir se recupera todo desde IndexedDB
+    page.evaluate('localStorage.clear()'); page.reload(); page.wait_for_selector('.hero'); page.wait_for_timeout(200)
+    cur = page.evaluate(f"JSON.parse(localStorage.getItem('{P}current'))")
+    check(cur and len(cur['movimientos']) == 2 and cur['mesLabel'] == 'Octubre 2026', 'recuperación desde IndexedDB tras borrar localStorage')
+    check('Recuperamos' in page.inner_text('#toast'), 'aviso de recuperación')
+    check(page.evaluate(f"JSON.parse(localStorage.getItem('{P}history'))")[0]['ahorro'] == 200000, 'historial recuperado')
+    # 4) Si IndexedDB tiene una versión más nueva (p. ej. localStorage lleno), gana IndexedDB
+    newer = json.loads(page.evaluate(IDB_READ, 'current')); newer['mesLabel'] = 'Noviembre 2026'
+    page.evaluate(IDB_WRITE, ['current', json.dumps(newer)])
+    page.evaluate(IDB_WRITE, ['rev', str(10**13)])
+    page.reload(); page.wait_for_selector('.hero'); page.wait_for_timeout(200)
+    check('Noviembre 2026' in page.inner_text('#mes-label'), 'gana la copia más nueva (IndexedDB)')
+    # 5) Empate o localStorage más nuevo: gana localStorage
+    page.evaluate(f"""() => {{ const c = JSON.parse(localStorage.getItem('{P}current')); c.mesLabel = 'Diciembre 2026';
+        localStorage.setItem('{P}current', JSON.stringify(c)); localStorage.setItem('{P}rev', String(2*10**13)); }}""")
+    page.reload(); page.wait_for_selector('.hero'); page.wait_for_timeout(200)
+    check('Diciembre 2026' in page.inner_text('#mes-label'), 'gana la copia más nueva (localStorage)')
+    check(json.loads(page.evaluate(IDB_READ, 'current'))['mesLabel'] == 'Diciembre 2026', 'IndexedDB se resincroniza')
+    check(not errs, f'doble copia sin errores {errs}')
+    ctx.close()
+    # 6) Navegador sin IndexedDB: sigue andando solo con localStorage
+    ctx = b.new_context(viewport={'width': 390, 'height': 844})
+    ctx.route(lambda u: not u.startswith('file:'), lambda r: r.fulfill(status=200, body='', content_type='text/css'))
+    ctx.add_init_script("Object.defineProperty(window, 'indexedDB', {get(){ return undefined; }})")
+    page = ctx.new_page(); errs = []
+    page.on('pageerror', lambda e: errs.append(str(e)))
+    page.on('console', lambda m: errs.append(m.text) if m.type == 'error' else None)
+    page.goto(URL); page.wait_for_selector('.hero')
+    page.click('.nav [data-tab=fijos]'); page.locator('[data-act=toggle-gasto]').first.click(); page.wait_for_timeout(100)
+    page.reload(); page.wait_for_selector('.hero'); page.click('.nav [data-tab=fijos]')
+    check(page.locator('.row.is-done').count() >= 1, 'sin IndexedDB: guarda y recarga con localStorage')
+    page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet')
+    check('Copia única' in page.inner_text('.store-status'), 'sin IndexedDB: el menú lo indica')
+    check(not errs, f'sin IndexedDB: sin errores {errs}')
+    ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -144,6 +211,7 @@ with sync_playwright() as pw:
         for theme in ['light', 'dark']:
             flujo(b, w, h, theme)
     migracion(b)
+    doble_copia(b)
     primera_vez(b)
     b.close()
 

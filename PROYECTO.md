@@ -6,10 +6,11 @@ Objetivo: que sea la mejor app de finanzas personales posible, profesional y có
 
 ## Estado actual
 
-- **Versión:** 1.1 (10 nov 2026) · esquema de datos 1
-- **Qué hace hoy:** resumen con ahorro proyectado y % de los ingresos; gastos fijos con checklist de pagado, categoría, día de vencimiento y monto real vs estimado; ingresos con cobrado/pendiente; movimientos (gastos variables) con fecha y categoría; cierre de mes con historial, gráfico de evolución y detalle por categoría; respaldo/restauración JSON, exportación CSV, modo claro/oscuro, menú de opciones; pantalla «Novedades» con aviso (punto en el botón de menú) al actualizar; versión visible al pie del menú; datos con `schemaVersion` y migraciones automáticas (también al restaurar respaldos viejos), con copia interna previa a cada migración.
+- **Versión:** 1.3 (16 nov 2026) · esquema de datos 1
+- **Qué hace hoy:** resumen con ahorro proyectado y % de los ingresos; gastos fijos con checklist de pagado, categoría, día de vencimiento y monto real vs estimado; ingresos con cobrado/pendiente; movimientos (gastos variables) con fecha y categoría; cierre de mes con historial, gráfico de evolución y detalle por categoría; respaldo/restauración JSON, exportación CSV, modo claro/oscuro, menú de opciones; pantalla «Novedades» con aviso (punto en el botón de menú) al actualizar; versión visible al pie del menú; datos con `schemaVersion` y migraciones automáticas (también al restaurar respaldos viejos), con copia interna previa a cada migración; lista del mes completa como checklist (v1.2); doble copia de los datos en IndexedDB + localStorage con recuperación automática y estado visible en el menú (v1.3).
 - **Archivos en este artifact:** `index.html` (la app completa, todo el código), `PROYECTO.md` (este documento: memoria del proyecto) y `tests.py` (pruebas Playwright: `python3 tests.py index.html capturas`).
 - **Datos y migraciones (desde v1.1):** clave `control-mensual:meta` = `{schemaVersion, appVersion, vistoNovedades[]}`. Esquema 0 = datos v1.0 sin meta. Para cambiar la estructura: subir `SCHEMA_VERSION` y agregar `MIGRATIONS[n](d)` que reciba `{config,current,history}` del esquema n-1. Antes de migrar se guarda `control-mensual:pre-migracion-esquema-<n>` con los textos originales. Si los datos son de un esquema más nuevo que la app, no se sobrescriben.
+- **Almacenamiento (desde v1.3):** cada guardado escribe en localStorage (`control-mensual:<clave>`) y en IndexedDB (base `control-mensual`, almacén `kv`, mismas claves sin prefijo) y deja la marca `rev` (ms) en las dos. Al abrir gana la copia con `rev` mayor (empate o sin marca: localStorage) y la otra se resincroniza. Si localStorage no se pudo escribir completo, su `rev` queda en 0. Sin IndexedDB, la app sigue solo con localStorage. No hizo falta subir el esquema: la estructura de los datos no cambió.
 - **Novedades:** agregar cada versión al principio del arreglo `CHANGELOG` y subir `VERSION`.
 
 ## Reglas de trabajo (mandan sobre todo lo demás)
@@ -30,7 +31,7 @@ Orden de trabajo: de arriba hacia abajo. Cada corrida hace 1 a 3 ítems según s
 ### Fase 0 — Bases sólidas
 - [x] 1. (v1.1) Constante `VERSION` y pantalla «Novedades» en el menú (qué cambió en cada versión).
 - [x] 2. (v1.1) `schemaVersion` y sistema de migraciones de datos entre versiones.
-- [ ] 3. Guardado en IndexedDB con respaldo en localStorage (más espacio, necesario para adjuntos), migrando los datos actuales sin pérdida.
+- [x] 3. (v1.3) Guardado en IndexedDB con respaldo en localStorage (más espacio, necesario para adjuntos), migrando los datos actuales sin pérdida.
 - [ ] 4. Aviso «hace X días que no descargás un respaldo» con acceso directo.
 - [ ] 5. Respaldo alternativo para cuando la descarga está bloqueada: «Copiar respaldo» y «Pegar respaldo» (texto).
 - [ ] 6. «Deshacer» en el aviso inferior al borrar un gasto, ingreso, movimiento o mes.
@@ -147,7 +148,7 @@ Orden de trabajo: de arriba hacia abajo. Cada corrida hace 1 a 3 ítems según s
 
 ## Pendientes / problemas abiertos
 - (ninguno)
-- Nota para la próxima corrida: el ítem 3 (IndexedDB) es grande; conviene hacerlo como migración de esquema 2 manteniendo una copia espejo en localStorage, y ampliar `tests.py` con su prueba de migración.
+- Nota: los comprobantes (Fase 2) deberían guardarse solo en IndexedDB (no en el espejo de localStorage, que tiene ~5 MB); usar `idbPut` con claves propias (p. ej. `adj:<id>`).
 
 ## Registro de cambios
 - 2026-11-10 — v1.1: ítems 1 (VERSION + Novedades con aviso), 2 (schemaVersion + migraciones, copia pre-migración, respaldos versionados y migrados al restaurar) y 9 (`tests.py`: flujo en 390x844 y 1280x900, claro/oscuro, sin scroll horizontal, tildar pago, cargar movimiento, cerrar mes, migración desde datos v1.0, primera instalación). Todas las pruebas OK.
@@ -164,3 +165,4 @@ Orden de trabajo: de arriba hacia abajo. Cada corrida hace 1 a 3 ítems según s
 - La dirección https://gpereira-ucip.github.io/control-de-gastos/ se publica desde la rama gh-pages. El workflow `.github/workflows/publicar.yml` copia main a gh-pages solo en cada push: no lo borres ni toques gh-pages a mano.
 
 - 14/11/2026 · v1.2 (pedido de Gonzalo): en Resumen, «Gastos del mes» muestra todos los gastos fijos (sin «Ver todos») y lo tildado queda tildado en su lugar; sigue apareciendo en «Pagados».
+- 16/11/2026 · v1.3: ítem 3. Doble copia IndexedDB + localStorage con marca `rev`, recuperación automática si se borra una copia (con aviso), estado en el menú de Opciones. `tests.py` amplía: datos v1.2 pasan a IndexedDB, escritura en ambas, recuperación tras borrar localStorage, gana la copia más nueva en los dos sentidos, navegador sin IndexedDB; además espera la primera carga antes de sembrar datos (evitaba una falla intermitente). TODO OK.
