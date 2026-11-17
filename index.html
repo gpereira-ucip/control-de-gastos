@@ -212,6 +212,14 @@ button{cursor:pointer}
 .summary-box b{font-weight:800}
 .alert{margin-top:12px;padding:12px 14px;border-radius:12px;font-size:13.5px;background:color-mix(in srgb,var(--warn) 14%,transparent);color:var(--warn);font-weight:600}
 
+.nudge{display:flex;gap:12px;align-items:flex-start;border-left:4px solid var(--warn)}
+.nudge .ic{width:38px;height:38px;border-radius:10px;flex:none;display:grid;place-items:center;background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.nudge .ic svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.nudge-txt{flex:1;min-width:0}
+.nudge-txt b{display:block;font-size:15px;margin-bottom:2px}
+.nudge-txt p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.45}
+.nudge-act{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.nudge-act .btn{padding:9px 14px;font-size:13.5px}
 .toast{position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);opacity:0;
   background:var(--text);color:var(--bg);padding:11px 18px;border-radius:12px;font-weight:700;font-size:13.5px;z-index:60;transition:.25s;pointer-events:none}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -253,8 +261,13 @@ button{cursor:pointer}
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '1.3';
+const VERSION = '1.4';
 const CHANGELOG = [
+  {v:'1.4', fecha:'17 nov 2026', items:[
+    'Aviso de respaldo en el Resumen: si pasó una semana sin descargar un respaldo (o nunca descargaste uno en este dispositivo), la app te lo recuerda con un botón para hacerlo en el momento.',
+    'Podés tocar «Más tarde» y el aviso descansa 3 días.',
+    'En el menú, «Descargar respaldo» muestra cuándo fue el último.'
+  ]},
   {v:'1.3', fecha:'16 nov 2026', items:[
     'Tus datos ahora se guardan por duplicado en el navegador: en la base interna (IndexedDB, con mucho más espacio, lista para los comprobantes que vienen) y en el almacenamiento local de siempre.',
     'Si una de las dos copias se borra o falla, la app se recupera sola con la otra al abrirse, y te avisa.',
@@ -422,7 +435,40 @@ async function storeSetMany(entries){
 }
 
 let config, current, hist;
-const ui = {tab:'resumen', filtro:'todos', openHist:null, novedad:false};
+const ui = {tab:'resumen', filtro:'todos', openHist:null, novedad:false, respaldo:null};
+
+/* ---------- Aviso de respaldo (v1.4) ----------
+   Vive en meta.respaldo = {ultimo: ms|null, base: ms, pospuesto: ms|null}. No es parte de los datos
+   (no cambia el esquema): ultimo = última descarga de respaldo en este dispositivo; base = desde cuándo
+   se cuenta si nunca hubo descarga (0 si ya había datos al actualizar: avisa enseguida); pospuesto =
+   «Más tarde» silencia el aviso hasta esa fecha. */
+const RESPALDO_DIAS = 7, RESPALDO_POSPONER_DIAS = 3, DIA_MS = 864e5;
+async function metaPatch(fn){
+  let meta={}; try{ meta=JSON.parse(await storeGet('meta')||'{}')||{}; }catch(e){ meta={}; }
+  fn(meta); await storeSet('meta', JSON.stringify(meta)); return meta;
+}
+function respaldoEstado(now=Date.now()){
+  const r=ui.respaldo; if(!r) return null;
+  const dias = r.ultimo ? Math.floor((now-r.ultimo)/DIA_MS) : null;
+  const vencido = r.ultimo ? dias>=RESPALDO_DIAS : (now-(Number(r.base)||0))>=RESPALDO_DIAS*DIA_MS;
+  const pospuesto = r.pospuesto && now < r.pospuesto;
+  return {dias, nunca:!r.ultimo, mostrar: vencido && !pospuesto};
+}
+function respaldoTexto(){
+  const e=respaldoEstado(); if(!e) return 'Guarda todos tus datos en un archivo .json';
+  if(e.nunca) return 'Todavía no descargaste ninguno en este dispositivo';
+  return 'Último: '+(e.dias===0?'hoy':e.dias===1?'ayer':`hace ${e.dias} días`);
+}
+function respaldoAviso(){
+  const e=respaldoEstado(); if(!e || !e.mostrar) return '';
+  const titulo = e.nunca ? 'Todavía no descargaste un respaldo' : `Hace ${e.dias} días que no descargás un respaldo`;
+  return `<div class="card nudge" id="aviso-respaldo" role="status">
+    <span class="ic">${svg('download')}</span>
+    <div class="nudge-txt"><b>${titulo}</b>
+      <p>Tus datos viven solo en este navegador. Un archivo de respaldo te cuida si se borra o cambiás de equipo.</p>
+      <div class="nudge-act"><button class="btn" data-act="respaldo-ya">Descargar respaldo</button><button class="btn ghost" data-act="respaldo-luego">Más tarde</button></div>
+    </div></div>`;
+}
 
 /* ---------- Esquema de datos y migraciones ----------
    schemaVersion 0 = datos de la v1.0 (sin número de esquema).
@@ -475,7 +521,9 @@ async function load(){
   if(from > SCHEMA_VERSION){ toast('Estos datos son de una versión más nueva de la app: usá el archivo más reciente'); return; }
   await saveAll();
   ui.novedad = hadData && meta.appVersion !== VERSION && !meta.vistoNovedades?.includes(VERSION);
-  await storeSet('meta', JSON.stringify({...meta, schemaVersion:SCHEMA_VERSION, appVersion:VERSION}));
+  const rsp = (meta.respaldo && typeof meta.respaldo==='object') ? meta.respaldo : {ultimo:null, base: hadData?0:Date.now(), pospuesto:null};
+  ui.respaldo = rsp;
+  await storeSet('meta', JSON.stringify({...meta, schemaVersion:SCHEMA_VERSION, appVersion:VERSION, respaldo:rsp}));
 }
 async function marcarNovedadesVistas(){
   let meta={}; try{ meta=JSON.parse(await storeGet('meta')||'{}')||{}; }catch(e){}
@@ -609,7 +657,7 @@ function donut(t){
 function viewResumen(t){
   /* Checklist del mes (pedido de Gonzalo, 14/11/2026): se ven todos los gastos fijos y lo tildado queda tildado en su lugar. */
   const lista = [...config.gastos].sort((a,b)=>(Number(a.vence)||99)-(Number(b.vence)||99));
-  return `<div class="grid">
+  return `${respaldoAviso()}<div class="grid">
     <div class="card"><div class="card-h"><h2>¿En qué se va la plata?</h2><span class="sub">${esc(current.mesLabel)}</span></div>${donut(t)}</div>
     <div class="card"><div class="card-h"><h2>Gastos del mes</h2><span class="sub">${t.nPag} de ${t.nFijos} pagados</span></div>
       ${lista.length? lista.map(gastoRow).join('') : `<div class="empty"><b>Sin gastos fijos</b>Agregalos desde «Gastos fijos».</div>`}
@@ -801,7 +849,9 @@ function download(name, content, type){
   document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
 }
 const MENU = {
-  backup(){ download(`control-mensual-respaldo-${todayISO()}.json`, JSON.stringify({version:2,schemaVersion:SCHEMA_VERSION,appVersion:VERSION,config,current,history:hist},null,2),'application/json'); toast('Respaldo descargado'); },
+  async backup(){ download(`control-mensual-respaldo-${todayISO()}.json`, JSON.stringify({version:2,schemaVersion:SCHEMA_VERSION,appVersion:VERSION,config,current,history:hist},null,2),'application/json'); toast('Respaldo descargado');
+    const ahora=Date.now(); ui.respaldo={...(ui.respaldo||{}), ultimo:ahora, pospuesto:null};
+    await metaPatch(m=>{ m.respaldo={...(m.respaldo||{}), ultimo:ahora, pospuesto:null}; }); render(); },
   restore(){ document.getElementById('file-import').click(); },
   csv(){
     const q=v=>`"${String(v??'').replace(/"/g,'""')}"`;
@@ -830,7 +880,7 @@ const MENU = {
 function sheetMenu(){
   const it=(k,ic,l,s)=>`<button type="button" class="menu-item" data-run="${k}"><span class="ic">${svg(ic)}</span><span>${l}<small>${s}</small></span></button>`;
   openSheet({title:'Opciones', body:
-    it('backup','download','Descargar respaldo','Guarda todos tus datos en un archivo .json')+
+    it('backup','download','Descargar respaldo',esc(respaldoTexto()))+
     it('restore','upload','Restaurar respaldo','Cargar un archivo .json descargado antes')+
     it('csv','table','Exportar mes a Excel','CSV con ingresos, fijos y movimientos')+
     it('theme','moon','Cambiar tema','Alternar entre modo claro y oscuro')+
@@ -861,6 +911,9 @@ document.addEventListener('click', async e=>{
     case 'rename-mes': sheetRename(); break;
     case 'cerrar-mes': sheetCerrar(); break;
     case 'menu': sheetMenu(); break;
+    case 'respaldo-ya': MENU.backup(); break;
+    case 'respaldo-luego': { const hasta=Date.now()+RESPALDO_POSPONER_DIAS*DIA_MS; ui.respaldo={...(ui.respaldo||{}), pospuesto:hasta};
+      await metaPatch(m=>{ m.respaldo={...(m.respaldo||{}), pospuesto:hasta}; }); render(); toast('Te lo recuerdo en 3 días'); break; }
     case 'hist-toggle': { const i=Number(el.dataset.i); ui.openHist = ui.openHist===i?null:i; render(); break; }
     case 'hist-del': { const i=Number(el.dataset.i);
       openSheet({title:'Eliminar mes', body:`<p style="color:var(--muted);margin:0">¿Eliminar <b style="color:var(--text)">${esc(hist[i].mesLabel)}</b> del historial? No se puede deshacer.</p>`,

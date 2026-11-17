@@ -10,6 +10,8 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
   - novedades / versión
   - (v1.3) doble copia IndexedDB + localStorage: espejo, recuperación si se borra localStorage,
     gana la copia más nueva, datos v1.2 (solo localStorage) pasan a IndexedDB sin pérdida
+  - (v1.4) aviso de respaldo: aparece con datos viejos sin respaldo, «Descargar» lo apaga y anota la fecha,
+    «Más tarde» lo pospone 3 días, vuelve a los 7 días, no aparece en instalación nueva
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -194,6 +196,56 @@ def doble_copia(b):
     check(not errs, f'sin IndexedDB: sin errores {errs}')
     ctx.close()
 
+def aviso_respaldo(b):
+    print('\n== Aviso de respaldo (v1.4)')
+    DIA = 864e5
+    for w, h in [(390, 844), (1280, 900)]:
+        for theme in ['light', 'dark']:
+            label = f'{w} {theme}'
+            ctx, page, errs = new_page(b, w, h, theme=theme, seed=V10)
+            check(page.locator('#aviso-respaldo').count() == 1, f'{label}: aviso visible con datos y sin respaldo')
+            check('Todavía no' in page.inner_text('#aviso-respaldo'), f'{label}: texto «todavía no descargaste»')
+            no_hscroll(page, w, f'{label} con aviso')
+            page.screenshot(path=str(SHOTS / f'aviso-respaldo-{w}-{theme}.png'))
+            cur = page.evaluate(f"JSON.parse(localStorage.getItem('{P}current'))")
+            check(cur['gastos']['g1'] == {'real': 61000, 'pagado': True}, f'{label}: datos conservados')
+            if w == 390 and theme == 'light':
+                with page.expect_download() as d:
+                    page.click('[data-act=respaldo-ya]')
+                check(d.value.suggested_filename.startswith('control-mensual-respaldo-'), 'descarga el respaldo desde el aviso')
+                page.wait_for_timeout(200)
+                check(page.locator('#aviso-respaldo').count() == 0, 'el aviso desaparece tras descargar')
+                meta = page.evaluate(f"JSON.parse(localStorage.getItem('{P}meta'))")
+                ult = meta['respaldo']['ultimo']
+                check(isinstance(ult, (int, float)) and ult > 0, 'fecha del último respaldo guardada')
+                page.reload(); page.wait_for_selector('.hero')
+                check(page.locator('#aviso-respaldo').count() == 0, 'no vuelve al recargar')
+                page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet')
+                check('Último: hoy' in page.inner_text('[data-run=backup]'), 'menú muestra «Último: hoy»')
+                page.keyboard.press('Escape')
+                # simular último respaldo hace 9 días (en las dos copias)
+                page.evaluate(SET_META_ULTIMO, [P, 9 * DIA])
+                page.reload(); page.wait_for_selector('.hero')
+                txt = page.inner_text('#aviso-respaldo') if page.locator('#aviso-respaldo').count() else ''
+                check('Hace 9 días' in txt, f'a los 9 días vuelve: «Hace 9 días…» ({txt[:40]!r})')
+                page.click('[data-act=respaldo-luego]'); page.wait_for_timeout(200)
+                check(page.locator('#aviso-respaldo').count() == 0, '«Más tarde» oculta el aviso')
+                meta = page.evaluate(f"JSON.parse(localStorage.getItem('{P}meta'))")
+                pos = meta['respaldo'].get('pospuesto') or 0
+                now = page.evaluate('Date.now()')
+                check(2.9 * DIA < pos - now <= 3 * DIA + 1000, 'pospuesto 3 días')
+                page.reload(); page.wait_for_selector('.hero')
+                check(page.locator('#aviso-respaldo').count() == 0, 'sigue pospuesto al recargar')
+            check(not errs, f'{label}: sin errores {errs}')
+            ctx.close()
+
+SET_META_ULTIMO = """([P, hace]) => new Promise(res => {
+  const m = JSON.parse(localStorage.getItem(P + 'meta')); m.respaldo.ultimo = Date.now() - hace; const t = JSON.stringify(m);
+  localStorage.setItem(P + 'meta', t);
+  const rq = indexedDB.open('control-mensual');
+  rq.onsuccess = () => { const db = rq.result; const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(t, 'meta');
+    tx.oncomplete = () => { db.close(); res(1); }; }; })"""
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -201,6 +253,7 @@ def primera_vez(b):
     check(meta and meta['schemaVersion'] >= 1, 'meta creado en instalación nueva')
     check(page.locator('.appbar .dot').count() == 0, 'sin aviso de novedades la primera vez')
     check(not page.evaluate(f"Object.keys(localStorage).some(k=>k.includes('pre-migracion'))"), 'sin copia pre-migración innecesaria')
+    check(page.locator('#aviso-respaldo').count() == 0, 'sin aviso de respaldo en instalación nueva')
     check(not errs, f'sin errores {errs}')
     ctx.close()
 
@@ -212,6 +265,7 @@ with sync_playwright() as pw:
             flujo(b, w, h, theme)
     migracion(b)
     doble_copia(b)
+    aviso_respaldo(b)
     primera_vez(b)
     b.close()
 
