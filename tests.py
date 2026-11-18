@@ -12,6 +12,9 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     gana la copia más nueva, datos v1.2 (solo localStorage) pasan a IndexedDB sin pérdida
   - (v1.4) aviso de respaldo: aparece con datos viejos sin respaldo, «Descargar» lo apaga y anota la fecha,
     «Más tarde» lo pospone 3 días, vuelve a los 7 días, no aparece en instalación nueva
+  - (v1.5) respaldo como texto: «Copiar respaldo» copia al portapapeles y anota la fecha; «Pegar respaldo»
+    restaura (con texto alrededor), migra uno v1.0, rechaza texto incompleto/ajeno con mensaje en línea
+    sin tocar los datos, guarda 'pre-restauracion' antes de reemplazar; 390/1280 claro/oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -246,6 +249,81 @@ SET_META_ULTIMO = """([P, hace]) => new Promise(res => {
   rq.onsuccess = () => { const db = rq.result; const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(t, 'meta');
     tx.oncomplete = () => { db.close(); res(1); }; }; })"""
 
+def respaldo_texto(b):
+    print('\n== Respaldo como texto (v1.5)')
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    for w, h in [(390, 844), (1280, 900)]:
+        for theme in ['light', 'dark']:
+            label = f'{w} {theme}'
+            ctx, page, errs = new_page(b, w, h, theme=theme, seed=V10)
+            ctx.grant_permissions(['clipboard-read', 'clipboard-write'])
+            check(page.locator('[data-act=respaldo-copiar]').count() == 1, f'{label}: el aviso ofrece copiar como texto')
+            page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet')
+            check(page.locator('[data-run=copiar]').count() == 1 and page.locator('[data-run=pegar]').count() == 1, f'{label}: menú con Copiar y Pegar respaldo')
+            page.screenshot(path=str(SHOTS / f'menu-texto-{w}-{theme}.png'))
+            page.click('[data-run=copiar]'); page.wait_for_selector('.sheet textarea')
+            no_hscroll(page, w, f'{label} hoja copiar')
+            page.screenshot(path=str(SHOTS / f'copiar-{w}-{theme}.png'))
+            page.click('.sheet button[type=submit]'); page.wait_for_timeout(300)
+            clip = page.evaluate('navigator.clipboard.readText()')
+            d = json.loads(clip)
+            check(d['current']['gastos']['g1'] == {'real': 61000, 'pagado': True} and d['schemaVersion'] >= 1, f'{label}: portapapeles con el respaldo completo')
+            check(page.locator('.sheet').count() == 0 and 'copiado' in page.inner_text('#toast'), f'{label}: hoja se cierra y avisa')
+            meta = get(page, 'meta')
+            check((meta['respaldo'].get('ultimo') or 0) > 0 and page.locator('#aviso-respaldo').count() == 0, f'{label}: copiar cuenta como respaldo y apaga el aviso')
+            # pegar texto inválido: mensaje en línea y datos intactos
+            antes = get(page, 'current')
+            page.click('.appbar [data-act=menu]'); page.click('[data-run=pegar]'); page.wait_for_selector('.sheet textarea')
+            page.fill('.sheet textarea', clip[:len(clip)//2]); page.click('.sheet button[type=submit]'); page.wait_for_timeout(200)
+            check(page.locator('.sheet .form-err').count() == 1 and 'incompleto' in page.inner_text('.sheet .form-err'), f'{label}: texto cortado → «incompleto»')
+            page.fill('.sheet textarea', 'hola, esto no es nada'); page.click('.sheet button[type=submit]'); page.wait_for_timeout(200)
+            check('no parece un respaldo' in page.inner_text('.sheet .form-err'), f'{label}: texto ajeno → mensaje claro')
+            page.fill('.sheet textarea', '{"config":{},"current":{},"schemaVersion":99}'); page.click('.sheet button[type=submit]'); page.wait_for_timeout(200)
+            check('más nueva' in page.inner_text('.sheet .form-err'), f'{label}: esquema futuro rechazado')
+            check(get(page, 'current') == antes, f'{label}: errores no tocan los datos')
+            no_hscroll(page, w, f'{label} hoja pegar con error')
+            page.screenshot(path=str(SHOTS / f'pegar-error-{w}-{theme}.png'))
+            if w == 390 and theme == 'light':
+                # «Pegar» desde el portapapeles llena el recuadro
+                page.evaluate('navigator.clipboard.writeText("x")'); page.fill('.sheet textarea', '')
+                page.evaluate(f'navigator.clipboard.writeText({json.dumps(clip)})')
+                page.click('.sheet .actions button[type=button]'); page.wait_for_timeout(200)
+                check(page.input_value('.sheet textarea') == clip, 'botón Pegar trae el portapapeles')
+                page.keyboard.press('Escape'); page.wait_for_timeout(100)
+                # cambiar datos y restaurar desde el texto (con texto alrededor, como en un mail)
+                page.click('.nav [data-tab=movimientos]')
+                page.fill('#mov-form [name=desc]', 'Kiosco'); page.fill('#mov-form [name=monto]', '999')
+                page.click('#mov-form button'); page.wait_for_timeout(200)
+                check(len(get(page, 'current')['movimientos']) == 2, 'cambio local antes de restaurar')
+                page.click('.appbar [data-act=menu]'); page.click('[data-run=pegar]'); page.wait_for_selector('.sheet textarea')
+                page.fill('.sheet textarea', 'Respaldo del martes:\n' + clip + '\n-- enviado desde mi celular')
+                page.click('.sheet button[type=submit]'); page.wait_for_timeout(300)
+                cur = get(page, 'current')
+                check(len(cur['movimientos']) == 1 and cur['mesLabel'] == 'Octubre 2026', 'pegar restaura los datos copiados')
+                pre = json.loads(page.evaluate(f"localStorage.getItem('{P}pre-restauracion')") or '{}')
+                check(len(pre.get('current', {}).get('movimientos', [])) == 2, 'copia interna pre-restauración con lo anterior')
+                check(json.loads(page.evaluate(IDB_READ, 'current'))['movimientos'] == cur['movimientos'], 'restauración escrita también en IndexedDB')
+                # pegar un respaldo v1.0 (sin esquema) lo migra
+                page.click('.appbar [data-act=menu]'); page.click('[data-run=pegar]'); page.wait_for_selector('.sheet textarea')
+                page.fill('.sheet textarea', json.dumps({'version': 2, **V10})); page.click('.sheet button[type=submit]'); page.wait_for_timeout(300)
+                check(get(page, 'config')['gastos'][1].get('categoria') == 'hogar', 'pegar respaldo v1.0 lo migra')
+                page.reload(); page.wait_for_selector('.hero')
+                check(get(page, 'history')[0]['ahorro'] == 200000, 'datos restaurados persisten al recargar')
+            else:
+                page.keyboard.press('Escape')
+            check(not errs, f'{label}: sin errores {errs}')
+            ctx.close()
+    # sin acceso al portapapeles: muestra cómo copiar a mano
+    ctx, page, errs = new_page(b, 390, 844, seed=V10)
+    page.evaluate("Object.defineProperty(navigator, 'clipboard', {get(){ return undefined; }}); document.execCommand = () => false;")
+    page.click('.appbar [data-act=menu]'); page.click('[data-run=copiar]'); page.wait_for_selector('.sheet textarea')
+    page.click('.sheet button[type=submit]'); page.wait_for_timeout(200)
+    check(page.locator('.sheet .form-err').count() == 1 and 'Seleccionar todo' in page.inner_text('.sheet .form-err'), 'sin portapapeles: indica copiar a mano y no cierra')
+    check(not (get(page, 'meta')['respaldo'].get('ultimo')), 'sin copiar no se anota respaldo')
+    page.screenshot(path=str(SHOTS / 'copiar-sin-portapapeles.png'))
+    check(not errs, f'sin portapapeles: sin errores {errs}')
+    ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -266,6 +344,7 @@ with sync_playwright() as pw:
     migracion(b)
     doble_copia(b)
     aviso_respaldo(b)
+    respaldo_texto(b)
     primera_vez(b)
     b.close()
 

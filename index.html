@@ -216,6 +216,11 @@ button{cursor:pointer}
 .nudge .ic{width:38px;height:38px;border-radius:10px;flex:none;display:grid;place-items:center;background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
 .nudge .ic svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .nudge-txt{flex:1;min-width:0}
+.nudge-alt{display:inline-block;margin-top:10px;padding:0;border:none;background:none;color:var(--muted);font-size:12.5px;font-weight:600;text-decoration:underline;text-underline-offset:3px}
+textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.4;word-break:break-all}
+.form-err{margin-top:10px;padding:10px 12px;border-radius:11px;font-size:13px;font-weight:600;background:color-mix(in srgb,var(--neg) 12%,transparent);color:var(--neg)}
+.form-ok{margin-top:10px;font-size:13px;font-weight:600;color:var(--pos)}
+.sheet-note{color:var(--muted);font-size:13.5px;margin:0 0 12px}
 .nudge-txt b{display:block;font-size:15px;margin-bottom:2px}
 .nudge-txt p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.45}
 .nudge-act{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
@@ -261,8 +266,14 @@ button{cursor:pointer}
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '1.4';
+const VERSION = '1.5';
 const CHANGELOG = [
+  {v:'1.5', fecha:'18 nov 2026', items:[
+    'Nuevo «Copiar respaldo» en el menú: copia todos tus datos como texto, para pegarlos en una nota, un mail o un chat con vos mismo. Sirve cuando el navegador no deja descargar archivos (por ejemplo, en el celular).',
+    'Nuevo «Pegar respaldo»: pegás ese texto y la app recupera tus datos, con aviso claro si el texto está incompleto o no es un respaldo.',
+    'Antes de restaurar (desde archivo o texto) la app guarda una copia interna de lo que tenías.',
+    'El aviso de respaldo del Resumen también ofrece copiarlo como texto.'
+  ]},
   {v:'1.4', fecha:'17 nov 2026', items:[
     'Aviso de respaldo en el Resumen: si pasó una semana sin descargar un respaldo (o nunca descargaste uno en este dispositivo), la app te lo recuerda con un botón para hacerlo en el momento.',
     'Podés tocar «Más tarde» y el aviso descansa 3 días.',
@@ -467,6 +478,7 @@ function respaldoAviso(){
     <div class="nudge-txt"><b>${titulo}</b>
       <p>Tus datos viven solo en este navegador. Un archivo de respaldo te cuida si se borra o cambiás de equipo.</p>
       <div class="nudge-act"><button class="btn" data-act="respaldo-ya">Descargar respaldo</button><button class="btn ghost" data-act="respaldo-luego">Más tarde</button></div>
+      <button type="button" class="nudge-alt" data-act="respaldo-copiar">¿No te deja descargar? Copialo como texto</button>
     </div></div>`;
 }
 
@@ -576,6 +588,8 @@ const IC = {
   check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   download:'<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
   upload:'<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>',
+  copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
+  paste:'<path d="M9 4h6v3H9zM7 5H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-1"/><path d="M9 13h6M9 17h4"/>',
   table:'<path d="M4 5h16v14H4zM4 10h16M4 15h16M10 5v14"/>',
   moon:'<path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/>',
   lock:'<path d="M6 11h12v9H6zM8 11V8a4 4 0 018 0v3"/>',
@@ -849,10 +863,11 @@ function download(name, content, type){
   document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);
 }
 const MENU = {
-  async backup(){ download(`control-mensual-respaldo-${todayISO()}.json`, JSON.stringify({version:2,schemaVersion:SCHEMA_VERSION,appVersion:VERSION,config,current,history:hist},null,2),'application/json'); toast('Respaldo descargado');
-    const ahora=Date.now(); ui.respaldo={...(ui.respaldo||{}), ultimo:ahora, pospuesto:null};
-    await metaPatch(m=>{ m.respaldo={...(m.respaldo||{}), ultimo:ahora, pospuesto:null}; }); render(); },
+  async backup(){ download(`control-mensual-respaldo-${todayISO()}.json`, respaldoJSON(2),'application/json'); toast('Respaldo descargado');
+    await marcarRespaldo(); },
   restore(){ document.getElementById('file-import').click(); },
+  copiar(){ sheetCopiar(); },
+  pegar(){ sheetPegar(); },
   csv(){
     const q=v=>`"${String(v??'').replace(/"/g,'""')}"`;
     const rows=[['Tipo','Ítem','Categoría','Fecha','Estimado','Real','Estado']];
@@ -877,11 +892,75 @@ const MENU = {
       actions:[{label:'Cancelar',cls:'ghost',fn:()=>{}},{label:'Reiniciar',primary:true,fn:async()=>{ current=newMonth(config,current.mesLabel); await saveAll(); render(); toast('Mes reiniciado'); }}]});
   }
 };
+/* ---------- Respaldo como texto (v1.5) ----------
+   «Copiar respaldo» y «Pegar respaldo»: el mismo contenido que el .json, en una sola línea,
+   para cuando el navegador no deja descargar ni elegir archivos. Restaurar (archivo o texto)
+   guarda antes una copia interna en la clave 'pre-restauracion'. */
+const respaldoJSON = sangria => JSON.stringify({version:2,schemaVersion:SCHEMA_VERSION,appVersion:VERSION,config,current,history:hist},null,sangria||undefined);
+async function marcarRespaldo(){
+  const ahora=Date.now(); ui.respaldo={...(ui.respaldo||{}), ultimo:ahora, pospuesto:null};
+  await metaPatch(m=>{ m.respaldo={...(m.respaldo||{}), ultimo:ahora, pospuesto:null}; }); render();
+}
+function leerRespaldo(texto){
+  // Devuelve {d} o {error}. Tolera texto alrededor (p. ej. pegado desde un mail).
+  const t=String(texto||'').trim();
+  if(!t) return {error:'Pegá el texto del respaldo en el recuadro.'};
+  const a=t.indexOf('{'), b=t.lastIndexOf('}');
+  if(a<0) return {error:'Ese texto no parece un respaldo de Control Mensual.'};
+  if(b<a) return {error:'El texto está incompleto: copialo de nuevo, entero (empieza con { y termina con }).'};
+  let d; try{ d=JSON.parse(t.slice(a,b+1)); }catch(e){ return {error:'El texto está incompleto o se modificó al copiarlo. Probá copiarlo de nuevo, entero.'}; }
+  if(!d || typeof d!=='object' || !d.config || !d.current) return {error:'Ese texto no parece un respaldo de Control Mensual.'};
+  if((Number(d.schemaVersion)||0) > SCHEMA_VERSION) return {error:'Ese respaldo es de una versión más nueva de la app: abrí la versión más reciente.'};
+  return {d};
+}
+async function aplicarRespaldo(d){
+  try{ await storeSet('pre-restauracion', JSON.stringify({guardado:new Date().toISOString(), deVersion:VERSION, config, current, history:hist})); }catch(e){}
+  ({config, current, history:hist} = migrateData({config:d.config, current:d.current, history:d.history||[]}, d.schemaVersion||0));
+  normalize(); await saveAll(); render();
+}
+async function copiarTexto(texto, ta){
+  try{ if(navigator.clipboard?.writeText){ await navigator.clipboard.writeText(texto); return true; } }catch(e){}
+  try{ ta.focus(); ta.select(); ta.setSelectionRange(0, texto.length); if(document.execCommand('copy')) return true; }catch(e){}
+  return false;
+}
+function sheetCopiar(){
+  const texto=respaldoJSON();
+  const kb=Math.max(1,Math.round(new Blob([texto]).size/1024));
+  openSheet({title:'Copiar respaldo', body:`<p class="sheet-note">Copiá este texto y pegalo en un lugar seguro (una nota, un mail o un chat con vos mismo). Para recuperar tus datos, usá «Pegar respaldo» en el menú.</p>
+    <textarea class="inp" name="texto" readonly aria-label="Texto del respaldo" spellcheck="false">${esc(texto)}</textarea>
+    <p style="font-size:12px;color:var(--muted);margin:6px 2px 0">${config.gastos.length} gastos fijos · ${config.ingresos.length} ingresos · ${current.movimientos.length} movimientos · ${hist.length} meses en el historial · ${kb} KB</p>
+    <div class="msg" aria-live="polite"></div>`,
+    actions:[{label:'Cerrar',cls:'ghost',fn:()=>{}},{label:'Copiar',primary:true,fn:async form=>{
+      const ok=await copiarTexto(texto, form.texto); const msg=form.querySelector('.msg');
+      if(!ok){ msg.innerHTML='<div class="form-err">No se pudo copiar solo. Mantené apretado el texto, elegí «Seleccionar todo» y después «Copiar».</div>'; form.texto.focus(); form.texto.select(); return false; }
+      await marcarRespaldo(); toast('Respaldo copiado: pegalo en un lugar seguro');
+    }}]});
+}
+function sheetPegar(){
+  const puedeLeer = !!navigator.clipboard?.readText;
+  const actions=[];
+  if(puedeLeer) actions.push({label:'Pegar',cls:'ghost',fn:async form=>{
+    const msg=form.querySelector('.msg');
+    try{ const t=await navigator.clipboard.readText(); if(t){ form.texto.value=t; msg.innerHTML=''; } else msg.innerHTML='<div class="form-err">El portapapeles está vacío.</div>'; }
+    catch(e){ msg.innerHTML='<div class="form-err">El navegador no dejó leer el portapapeles. Mantené apretado el recuadro y elegí «Pegar».</div>'; }
+    return false; }});
+  actions.push({label:'Restaurar',primary:true,fn:async form=>{
+    const msg=form.querySelector('.msg'); const r=leerRespaldo(form.texto.value);
+    if(r.error){ msg.innerHTML=`<div class="form-err" role="alert">${esc(r.error)}</div>`; form.texto.focus(); return false; }
+    await aplicarRespaldo(r.d); toast('Respaldo restaurado');
+  }});
+  openSheet({title:'Pegar respaldo', body:`<p class="sheet-note">Pegá el texto que copiaste con «Copiar respaldo». Va a <b style="color:var(--text)">reemplazar los datos de este dispositivo</b> (antes la app guarda una copia interna de lo que tenés ahora).</p>
+    <textarea class="inp" name="texto" aria-label="Texto del respaldo" spellcheck="false" autocomplete="off" placeholder='{"version":2,"schemaVersion":…}'></textarea>
+    <div class="msg" aria-live="polite"></div>`, actions});
+}
+
 function sheetMenu(){
   const it=(k,ic,l,s)=>`<button type="button" class="menu-item" data-run="${k}"><span class="ic">${svg(ic)}</span><span>${l}<small>${s}</small></span></button>`;
   openSheet({title:'Opciones', body:
     it('backup','download','Descargar respaldo',esc(respaldoTexto()))+
     it('restore','upload','Restaurar respaldo','Cargar un archivo .json descargado antes')+
+    it('copiar','copy','Copiar respaldo','Como texto, si no te deja descargar')+
+    it('pegar','paste','Pegar respaldo','Recuperar datos desde ese texto')+
     it('csv','table','Exportar mes a Excel','CSV con ingresos, fijos y movimientos')+
     it('theme','moon','Cambiar tema','Alternar entre modo claro y oscuro')+
     it('reset','reset','Reiniciar mes actual','Vaciar montos reales y movimientos')+
@@ -912,6 +991,7 @@ document.addEventListener('click', async e=>{
     case 'cerrar-mes': sheetCerrar(); break;
     case 'menu': sheetMenu(); break;
     case 'respaldo-ya': MENU.backup(); break;
+    case 'respaldo-copiar': sheetCopiar(); break;
     case 'respaldo-luego': { const hasta=Date.now()+RESPALDO_POSPONER_DIAS*DIA_MS; ui.respaldo={...(ui.respaldo||{}), pospuesto:hasta};
       await metaPatch(m=>{ m.respaldo={...(m.respaldo||{}), pospuesto:hasta}; }); render(); toast('Te lo recuerdo en 3 días'); break; }
     case 'hist-toggle': { const i=Number(el.dataset.i); ui.openHist = ui.openHist===i?null:i; render(); break; }
@@ -938,8 +1018,7 @@ document.getElementById('file-import').addEventListener('change', async e=>{
     const d=JSON.parse(await f.text());
     if(!d.config||!d.current) throw 0;
     if((Number(d.schemaVersion)||0) > SCHEMA_VERSION){ toast('Ese respaldo es de una versión más nueva de la app'); e.target.value=''; return; }
-    ({config, current, history:hist} = migrateData({config:d.config, current:d.current, history:d.history||[]}, d.schemaVersion||0));
-    normalize(); await saveAll(); render(); toast('Respaldo restaurado');
+    await aplicarRespaldo(d); toast('Respaldo restaurado');
   }catch(err){ toast('El archivo no es un respaldo válido'); }
   e.target.value='';
 });
