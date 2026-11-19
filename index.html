@@ -20,19 +20,19 @@
 <style>
 :root{
   --bg:#F3F4F6; --surface:#FFFFFF; --surface-2:#F1F3F6; --text:#0F172A; --muted:#64748B;
-  --border:#E5E7EB; --primary:#0F766E; --primary-ink:#FFFFFF; --pos:#059669; --neg:#DC2626; --warn:#D97706;
+  --border:#E5E7EB; --primary:#0F766E; --undo-ink:#5EEAD4; --primary-ink:#FFFFFF; --pos:#059669; --neg:#DC2626; --warn:#D97706;
   --hero-a:#0F172A; --hero-b:#16384A; --shadow:0 1px 2px rgba(15,23,42,.04),0 8px 24px rgba(15,23,42,.06);
   --radius:18px;
 }
 [data-theme=dark]{
   --bg:#0A0E13; --surface:#121820; --surface-2:#19212B; --text:#E6EDF3; --muted:#8B98A5;
-  --border:#232E3A; --primary:#2DD4BF; --primary-ink:#04201D; --pos:#34D399; --neg:#F87171; --warn:#FBBF24;
+  --border:#232E3A; --primary:#2DD4BF; --undo-ink:#0F766E; --primary-ink:#04201D; --pos:#34D399; --neg:#F87171; --warn:#FBBF24;
   --hero-a:#0F1B26; --hero-b:#123B3A; --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.25);
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme=light]){
     --bg:#0A0E13; --surface:#121820; --surface-2:#19212B; --text:#E6EDF3; --muted:#8B98A5;
-    --border:#232E3A; --primary:#2DD4BF; --primary-ink:#04201D; --pos:#34D399; --neg:#F87171; --warn:#FBBF24;
+    --border:#232E3A; --primary:#2DD4BF; --undo-ink:#0F766E; --primary-ink:#04201D; --pos:#34D399; --neg:#F87171; --warn:#FBBF24;
     --hero-a:#0F1B26; --hero-b:#123B3A; --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.25);
   }
 }
@@ -228,6 +228,10 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 .toast{position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);opacity:0;
   background:var(--text);color:var(--bg);padding:11px 18px;border-radius:12px;font-weight:700;font-size:13.5px;z-index:60;transition:.25s;pointer-events:none}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast{display:flex;align-items:center;gap:14px;width:max-content;max-width:calc(100vw - 32px);box-sizing:border-box}
+.toast.show.has-undo{pointer-events:auto;padding:6px 6px 6px 18px}
+.toast-undo{background:none;border:0;color:var(--undo-ink);font:inherit;font-weight:800;padding:8px 12px;border-radius:9px;cursor:pointer;white-space:nowrap}
+.toast-undo:hover,.toast-undo:focus-visible{background:color-mix(in srgb,var(--undo-ink) 18%,transparent);outline:none}
 @media (min-width:721px){.toast{bottom:28px}}
 @keyframes up{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -266,8 +270,12 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '1.5';
+const VERSION = '1.6';
 const CHANGELOG = [
+  {v:'1.6', fecha:'19 nov 2026', items:[
+    'Al eliminar un gasto fijo, un ingreso, un movimiento o un mes del historial, el aviso de abajo trae el botón «Deshacer»: tenés unos segundos para recuperarlo tal como estaba, en el mismo lugar.',
+    'Si te arrepentiste de un borrado, ya no hace falta volver a cargarlo a mano.'
+  ]},
   {v:'1.5', fecha:'18 nov 2026', items:[
     'Nuevo «Copiar respaldo» en el menú: copia todos tus datos como texto, para pegarlos en una nota, un mail o un chat con vos mismo. Sirve cuando el navegador no deja descargar archivos (por ejemplo, en el celular).',
     'Nuevo «Pegar respaldo»: pegás ese texto y la app recupera tus datos, con aviso claro si el texto está incompleto o no es un respaldo.',
@@ -793,7 +801,13 @@ function sheetGasto(id){
   const s = id ? current.gastos[id] : {real:''};
   const actions=[];
   if(id) actions.push({label:'Eliminar',cls:'danger',fn:async()=>{
-    config.gastos=config.gastos.filter(g=>g.id!==id); delete current.gastos[id]; await saveAll(); render(); toast('Gasto eliminado'); }});
+    const idx=config.gastos.findIndex(g=>g.id===id), item=config.gastos[idx], st=current.gastos[id], cfg=config, cur=current;
+    config.gastos=config.gastos.filter(g=>g.id!==id); delete current.gastos[id]; await saveAll(); render();
+    toast('Gasto eliminado', async()=>{
+      if(config!==cfg || !item){ toast('Ya no se puede deshacer'); return; }
+      reinsertar(config.gastos, idx, item);
+      if(!current.gastos[id]) current.gastos[id] = (current===cur && st) ? st : {real:'',pagado:false};
+      await saveAll(); render(); toast('Gasto recuperado'); }); }});
   actions.push({label:id?'Guardar':'Agregar',primary:true,fn:async(form,fd)=>{
     const nombre=fd.get('nombre').trim(); if(!nombre){ form.nombre.focus(); return false; }
     const data={nombre, categoria:fd.get('categoria'), estimado:Number(parseMonto(fd.get('estimado'))||0),
@@ -817,7 +831,13 @@ function sheetIngreso(id){
   const s = id ? current.ingresos[id] : {real:''};
   const actions=[];
   if(id) actions.push({label:'Eliminar',cls:'danger',fn:async()=>{
-    config.ingresos=config.ingresos.filter(g=>g.id!==id); delete current.ingresos[id]; await saveAll(); render(); toast('Ingreso eliminado'); }});
+    const idx=config.ingresos.findIndex(g=>g.id===id), item=config.ingresos[idx], st=current.ingresos[id], cfg=config, cur=current;
+    config.ingresos=config.ingresos.filter(g=>g.id!==id); delete current.ingresos[id]; await saveAll(); render();
+    toast('Ingreso eliminado', async()=>{
+      if(config!==cfg || !item){ toast('Ya no se puede deshacer'); return; }
+      reinsertar(config.ingresos, idx, item);
+      if(!current.ingresos[id]) current.ingresos[id] = (current===cur && st) ? st : {real:'',cobrado:false};
+      await saveAll(); render(); toast('Ingreso recuperado'); }); }});
   actions.push({label:id?'Guardar':'Agregar',primary:true,fn:async(form,fd)=>{
     const nombre=fd.get('nombre').trim(); if(!nombre){ form.nombre.focus(); return false; }
     const data={nombre, estimado:Number(parseMonto(fd.get('estimado'))||0), nota:fd.get('nota').trim()};
@@ -971,8 +991,23 @@ function sheetMenu(){
 }
 
 /* ---------- Eventos ---------- */
-let toastT;
-function toast(msg){ const el=document.getElementById('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove('show'),2200); }
+let toastT, toastUndo=null;
+const UNDO_MS = 6000; // tiempo para tocar «Deshacer»
+/* toast(msg) avisa; toast(msg, fn) agrega «Deshacer», que ejecuta fn una sola vez. */
+function toast(msg, undo){
+  const el=document.getElementById('toast');
+  toastUndo = typeof undo==='function' ? undo : null;
+  el.innerHTML = `<span class="toast-msg">${esc(msg)}</span>` + (toastUndo ? '<button type="button" class="toast-undo" id="toast-undo">Deshacer</button>' : '');
+  el.classList.toggle('has-undo', !!toastUndo);
+  el.setAttribute('role','status');
+  el.classList.add('show'); clearTimeout(toastT);
+  toastT=setTimeout(()=>{ el.classList.remove('show'); toastUndo=null; }, toastUndo ? UNDO_MS : 2200);
+  if(toastUndo) el.querySelector('#toast-undo').onclick = async ev=>{
+    ev.stopPropagation(); const f=toastUndo; if(!f) return; toastUndo=null; clearTimeout(toastT); el.classList.remove('show');
+    try{ await f(); }catch(err){ toast('No se pudo deshacer'); } };
+}
+/* Vuelve a poner un elemento borrado en su lugar (si no está ya). */
+function reinsertar(arr, idx, item){ if(!item || arr.includes(item)) return; arr.splice(Math.max(0,Math.min(idx,arr.length)),0,item); }
 
 document.addEventListener('click', async e=>{
   const el=e.target.closest('[data-act]'); if(!el || el.closest('.sheet')) return;
@@ -986,7 +1021,11 @@ document.addEventListener('click', async e=>{
     case 'add-gasto': sheetGasto(null); break;
     case 'edit-ingreso': sheetIngreso(id); break;
     case 'add-ingreso': sheetIngreso(null); break;
-    case 'del-mov': current.movimientos=current.movimientos.filter(m=>m.id!==id); await saveAll(); render(); toast('Movimiento eliminado'); break;
+    case 'del-mov': { const cur=current, idx=cur.movimientos.findIndex(m=>m.id===id), item=cur.movimientos[idx];
+      current.movimientos=current.movimientos.filter(m=>m.id!==id); await saveAll(); render();
+      toast('Movimiento eliminado', async()=>{
+        if(current!==cur || !item){ toast('Ya no se puede deshacer: el mes cambió'); return; }
+        reinsertar(current.movimientos, idx, item); await saveAll(); render(); toast('Movimiento recuperado'); }); break; }
     case 'rename-mes': sheetRename(); break;
     case 'cerrar-mes': sheetCerrar(); break;
     case 'menu': sheetMenu(); break;
@@ -996,8 +1035,12 @@ document.addEventListener('click', async e=>{
       await metaPatch(m=>{ m.respaldo={...(m.respaldo||{}), pospuesto:hasta}; }); render(); toast('Te lo recuerdo en 3 días'); break; }
     case 'hist-toggle': { const i=Number(el.dataset.i); ui.openHist = ui.openHist===i?null:i; render(); break; }
     case 'hist-del': { const i=Number(el.dataset.i);
-      openSheet({title:'Eliminar mes', body:`<p style="color:var(--muted);margin:0">¿Eliminar <b style="color:var(--text)">${esc(hist[i].mesLabel)}</b> del historial? No se puede deshacer.</p>`,
-        actions:[{label:'Cancelar',cls:'ghost',fn:()=>{}},{label:'Eliminar',cls:'danger',fn:async()=>{ hist.splice(i,1); ui.openHist=null; await saveAll(); render(); }}]}); break; }
+      openSheet({title:'Eliminar mes', body:`<p style="color:var(--muted);margin:0">¿Eliminar <b style="color:var(--text)">${esc(hist[i].mesLabel)}</b> del historial? Vas a tener unos segundos para tocar «Deshacer».</p>`,
+        actions:[{label:'Cancelar',cls:'ghost',fn:()=>{}},{label:'Eliminar',cls:'danger',fn:async()=>{
+          const h=hist, item=hist[i]; hist.splice(i,1); ui.openHist=null; await saveAll(); render();
+          toast(`${item.mesLabel} eliminado`, async()=>{
+            if(hist!==h){ toast('Ya no se puede deshacer'); return; }
+            reinsertar(hist, i, item); await saveAll(); render(); toast(`${item.mesLabel} recuperado`); }); }}]}); break; }
   }
 });
 document.addEventListener('submit', async e=>{

@@ -15,6 +15,8 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
   - (v1.5) respaldo como texto: «Copiar respaldo» copia al portapapeles y anota la fecha; «Pegar respaldo»
     restaura (con texto alrededor), migra uno v1.0, rechaza texto incompleto/ajeno con mensaje en línea
     sin tocar los datos, guarda 'pre-restauracion' antes de reemplazar; 390/1280 claro/oscuro
+  - (v1.6) «Deshacer» en el aviso al eliminar gasto fijo, ingreso, movimiento o mes del historial: vuelve
+    a su lugar con su estado (pagado/real), queda en IndexedDB, vence a los 6 s; 390/1280 claro/oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -324,6 +326,58 @@ def respaldo_texto(b):
     check(not errs, f'sin portapapeles: sin errores {errs}')
     ctx.close()
 
+def deshacer(b):
+    print('\n== Deshacer al eliminar (v1.6)')
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark')]:
+        label = f'{w} {theme}'
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=V10)
+        cur0, cfg0, hist0 = get(page, 'current'), get(page, 'config'), get(page, 'history')
+        # movimiento
+        page.click('.nav [data-tab=movimientos]'); page.wait_for_timeout(150)
+        page.click('[data-act=del-mov][data-id=m1]'); page.wait_for_timeout(200)
+        check(get(page, 'current')['movimientos'] == [], f'{label}: movimiento eliminado')
+        check(page.locator('#toast.show #toast-undo').count() == 1, f'{label}: aviso con «Deshacer»')
+        no_hscroll(page, w, label + ' con aviso')
+        page.screenshot(path=str(SHOTS / f'deshacer-{w}-{theme}.png'))
+        page.click('#toast-undo'); page.wait_for_timeout(250)
+        check(get(page, 'current')['movimientos'] == cur0['movimientos'], f'{label}: movimiento recuperado igual')
+        check(page.locator('.row-title', has_text='Súper').count() == 1, f'{label}: movimiento visible otra vez')
+        check('recuperado' in page.inner_text('#toast') and page.locator('#toast-undo').count() == 0, f'{label}: confirma sin otro «Deshacer»')
+        check(json.loads(page.evaluate(IDB_READ, 'current'))['movimientos'] == cur0['movimientos'], f'{label}: recuperado también en IndexedDB')
+        # gasto fijo (el primero, pagado y con monto real)
+        page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+        page.click('.row-main[data-act=edit-gasto][data-id=g1]'); page.wait_for_selector('.sheet')
+        page.click('.sheet .btn.danger'); page.wait_for_timeout(250)
+        check([g['id'] for g in get(page, 'config')['gastos']] == ['g2'] and 'g1' not in get(page, 'current')['gastos'], f'{label}: gasto eliminado')
+        page.click('#toast-undo'); page.wait_for_timeout(250)
+        check(get(page, 'config')['gastos'] == cfg0['gastos'], f'{label}: gasto recuperado en su lugar')
+        check(get(page, 'current')['gastos']['g1'] == cur0['gastos']['g1'], f'{label}: gasto conserva pagado y monto real')
+        # ingreso (está en el Resumen)
+        page.click('.nav [data-tab=resumen]'); page.wait_for_timeout(150)
+        page.click('.row-main[data-act=edit-ingreso][data-id=i1]'); page.wait_for_selector('.sheet')
+        page.click('.sheet .btn.danger'); page.wait_for_timeout(250)
+        check(get(page, 'config')['ingresos'] == [], f'{label}: ingreso eliminado')
+        page.click('#toast-undo'); page.wait_for_timeout(250)
+        check(get(page, 'config')['ingresos'] == cfg0['ingresos'] and get(page, 'current')['ingresos'] == cur0['ingresos'], f'{label}: ingreso recuperado con cobrado')
+        # mes del historial
+        page.click('.nav [data-tab=historial]'); page.wait_for_timeout(150)
+        page.click('[data-act=hist-toggle][data-i="0"]'); page.click('[data-act=hist-del][data-i="0"]'); page.wait_for_selector('.sheet')
+        check('Deshacer' in page.inner_text('.sheet'), f'{label}: la hoja ya no dice «No se puede deshacer»')
+        page.click('.sheet .btn.danger'); page.wait_for_timeout(250)
+        check(get(page, 'history') == [], f'{label}: mes eliminado')
+        page.click('#toast-undo'); page.wait_for_timeout(250)
+        check(get(page, 'history') == hist0, f'{label}: mes recuperado')
+        page.reload(); page.wait_for_selector('.hero')
+        check(get(page, 'current') == cur0 and get(page, 'config') == cfg0 and get(page, 'history') == hist0, f'{label}: tras recargar, todo igual que al principio')
+        # vence: pasado el tiempo el borrado queda firme
+        page.click('.nav [data-tab=movimientos]'); page.wait_for_timeout(150)
+        page.click('[data-act=del-mov][data-id=m1]'); page.wait_for_timeout(6500)
+        check(page.locator('#toast.show').count() == 0 and get(page, 'current')['movimientos'] == [], f'{label}: a los 6 s el aviso se va y el borrado queda')
+        check(page.evaluate("getComputedStyle(document.getElementById('toast')).pointerEvents") == 'none', f'{label}: aviso oculto no tapa toques')
+        check(not errs, f'{label}: sin errores {errs}')
+        ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -345,6 +399,7 @@ with sync_playwright() as pw:
     doble_copia(b)
     aviso_respaldo(b)
     respaldo_texto(b)
+    deshacer(b)
     primera_vez(b)
     b.close()
 
