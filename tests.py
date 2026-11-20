@@ -24,6 +24,10 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     botones con nombre, campos con etiqueta, filas y meses con Tab + Enter/Espacio, foco visible, hojas como
     diálogo (fondo inerte, Tab no se escapa, Escape cierra y el foco vuelve), tildar con teclado conserva el
     foco, Ctrl+Z deshace; 390/1280 claro/oscuro
+  - (v1.9) redibujo fino: al tildar gasto o ingreso la fila es el mismo nodo, no se mueve el scroll ni la fila,
+    la barra «Pagado» es el mismo nodo (anima); filtro «Pendientes» quita solo esa fila; borrar un movimiento
+    conserva los nodos de los demás; lo escrito en «Registrar gasto» sobrevive a un redibujo y se vacía al
+    agregar; cambiar de pestaña sigue andando; 390/1280 claro/oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -617,6 +621,74 @@ def accesibilidad(b):
         check(not errs, f'{label}: sin errores {errs}')
         ctx.close()
 
+def redibujo(b):
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    gs = [{'id': f'g{i}', 'nombre': f'Gasto {i}', 'estimado': 10000 + i, 'categoria': 'servicios', 'vence': (i % 28) + 1, 'nota': ''} for i in range(25)]
+    seed = {'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 1000000, 'nota': ''}], 'gastos': gs},
+            'current': {'mesLabel': 'Octubre 2026', 'gastos': {x['id']: {'real': '', 'pagado': False} for x in gs},
+                        'ingresos': {'i1': {'real': '', 'cobrado': False}},
+                        'movimientos': [{'id': f'm{i}', 'desc': f'Compra {i}', 'monto': 1000 * i, 'categoria': 'comida', 'fecha': '2026-10-0' + str(i), 'ts': i} for i in range(1, 5)]},
+            'history': []}
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark'), (390, 844, 'dark'), (1280, 900, 'light')]:
+        label = f'redibujo {w} {theme}'
+        print(f'\n== Redibujo fino (v1.9) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=seed)
+        for tab in ['resumen', 'fijos']:
+            page.click(f'.nav [data-tab={tab}]'); page.wait_for_timeout(500)
+            sel = '[data-act=toggle-gasto][data-id=g12]'
+            page.evaluate(f"document.querySelector('{sel}').scrollIntoView({{block:'center'}})"); page.wait_for_timeout(150)
+            check(page.evaluate('scrollY') > 200, f'{label} {tab}: la prueba arranca con la página scrolleada')
+            antes = page.evaluate(f"""() => {{ const b=document.querySelector('{sel}'); b.closest('.row').__marca=1;
+                document.querySelector('.hero .bar i').__marca=1; return [scrollY, b.getBoundingClientRect().top]; }}""")
+            page.click(sel); page.wait_for_timeout(250)
+            despues = page.evaluate(f"""() => {{ const b=document.querySelector('{sel}');
+                return [scrollY, b.getBoundingClientRect().top, !!b.closest('.row').__marca, !!document.querySelector('.hero .bar i').__marca,
+                        b.closest('.row').classList.contains('is-done'), document.activeElement===b]; }}""")
+            check(get(page, 'current')['gastos']['g12']['pagado'] is True, f'{label} {tab}: se tilda')
+            check(despues[0] == antes[0] and abs(despues[1] - antes[1]) < 1, f'{label} {tab}: sin salto de scroll ({antes[:2]} → {despues[:2]})')
+            check(despues[2] and despues[3], f'{label} {tab}: la fila y la barra son los mismos nodos')
+            check(despues[4] and despues[5], f'{label} {tab}: la fila se ve pagada y el foco sigue en el tilde')
+            page.click(sel); page.wait_for_timeout(200)
+        page.screenshot(path=str(SHOTS / f'redibujo-{w}-{theme}.png'))
+        # Ingresos
+        page.click('.nav [data-tab=resumen]'); page.wait_for_timeout(200)
+        page.evaluate("document.querySelector('[data-key=i-i1]').__marca=1")
+        page.click('[data-act=toggle-ingreso][data-id=i1]'); page.wait_for_timeout(200)
+        check(page.evaluate("!!document.querySelector('[data-key=i-i1]').__marca && document.querySelector('[data-key=i-i1]').classList.contains('is-done')"), f'{label}: cobrar un ingreso conserva la fila')
+        # Filtro «Pendientes»: tildar quita solo esa fila
+        page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+        page.click('[data-act=filtro][data-f=pend]'); page.wait_for_timeout(150)
+        page.evaluate("document.querySelector('[data-key=g-g6]').__marca=1")
+        n0 = page.locator('#app .row').count()
+        page.click('[data-act=toggle-gasto][data-id=g5]'); page.wait_for_timeout(200)
+        check(page.locator('#app .row').count() == n0 - 1 and page.locator('[data-key=g-g5]').count() == 0, f'{label}: en «Pendientes» se va solo la fila tildada')
+        check(page.evaluate("!!document.querySelector('[data-key=g-g6]').__marca"), f'{label}: las demás filas no se rehacen')
+        page.click('[data-act=filtro][data-f=todos]'); page.wait_for_timeout(150)
+        # Movimientos: borrar uno conserva los demás; lo escrito sobrevive; agregar vacía el formulario
+        page.click('.nav [data-tab=movimientos]'); page.wait_for_timeout(200)
+        page.evaluate("document.querySelector('[data-key=m-m1]').__marca=1; document.querySelector('[data-key=m-m4]').__marca=1")
+        page.click('[data-act=del-mov][data-id=m2]'); page.wait_for_timeout(200)
+        check(page.locator('[data-key=m-m2]').count() == 0 and page.evaluate("!!document.querySelector('[data-key=m-m1]').__marca && !!document.querySelector('[data-key=m-m4]').__marca"),
+              f'{label}: borrar un movimiento conserva los nodos de los otros')
+        page.fill('#mov-form [name=desc]', 'Farmacia'); page.fill('#mov-form [name=monto]', '4.200')
+        page.evaluate("async () => { current.gastos.g1.pagado = true; await saveAll(); render(); }"); page.wait_for_timeout(150)
+        check(page.input_value('#mov-form [name=desc]') == 'Farmacia' and page.input_value('#mov-form [name=monto]') == '4.200', f'{label}: lo escrito sobrevive a un redibujo')
+        page.fill('#mov-form [name=fecha]', '2026-10-09'); page.click('#mov-form button'); page.wait_for_timeout(250)
+        movs = get(page, 'current')['movimientos']
+        check(any(m['desc'] == 'Farmacia' and m['monto'] == 4200 for m in movs), f'{label}: el movimiento se registra')
+        hoy = page.evaluate('todayISO()')
+        check(page.input_value('#mov-form [name=desc]') == '' and page.input_value('#mov-form [name=monto]') == '' and page.input_value('#mov-form [name=fecha]') == hoy,
+              f'{label}: al agregar, el formulario se vacía y la fecha vuelve a hoy')
+        check(page.evaluate("document.activeElement.name") == 'desc', f'{label}: el foco vuelve a «Descripción»')
+        # Pestañas siguen andando
+        for tab in ['historial', 'fijos', 'resumen']:
+            page.click(f'.nav [data-tab={tab}]'); page.wait_for_timeout(120)
+            check(page.get_attribute(f'.nav [data-tab={tab}]', 'aria-current') == 'page', f'{label}: pestaña {tab}')
+        check(page.locator('#app .row').count() == 26, f'{label}: Resumen completo tras cambiar de pestañas')
+        no_hscroll(page, w, label)
+        check(not errs, f'{label}: sin errores {errs}')
+        ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -641,6 +713,7 @@ with sync_playwright() as pw:
     deshacer(b)
     validacion(b)
     accesibilidad(b)
+    redibujo(b)
     primera_vez(b)
     b.close()
 

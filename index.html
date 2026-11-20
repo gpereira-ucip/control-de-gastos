@@ -81,6 +81,8 @@ button{cursor:pointer}
 .pill.pos{color:#6EE7B7}.pill.neg{color:#FCA5A5}
 .ring{position:relative;width:84px;height:84px;flex:none}
 .ring svg{width:84px;height:84px;transform:rotate(-90deg)}
+.ring circle{transition:stroke-dasharray .5s ease,opacity .3s}
+.donut circle{transition:stroke-dasharray .4s ease,stroke-dashoffset .4s ease}
 .ring .lbl{position:absolute;inset:0;display:grid;place-items:center;text-align:center;font-weight:800;font-size:17px;line-height:1}
 .ring .lbl small{display:block;font-size:9.5px;font-weight:600;opacity:.65;letter-spacing:.05em;margin-top:3px}
 .hero-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:20px;position:relative;z-index:1}
@@ -285,8 +287,13 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '1.8';
+const VERSION = '1.9';
 const CHANGELOG = [
+  {v:'1.9', fecha:'20 nov 2026', items:[
+    'Al tildar un pago, cobrar un ingreso o borrar algo, la pantalla cambia solo en lo necesario: no salta, no parpadea y te quedás donde estabas.',
+    'La barra de «Pagado» y el anillo del resumen se mueven suavemente al tildar.',
+    'Si estabas escribiendo un movimiento y tildaste algo en el medio, lo que escribiste no se borra.'
+  ]},
   {v:'1.8', fecha:'20 nov 2026', items:[
     'Se puede usar toda la app con el teclado: Tab recorre botones, filas y meses; Enter o Espacio los abre, y se ve claramente dónde estás parado.',
     'Las hojas se cierran con Escape y, al cerrarlas, volvés al mismo lugar donde estabas. Mientras están abiertas, el teclado no se escapa al fondo.',
@@ -706,7 +713,7 @@ function gastoRow(x){
     const d=Number(s.real)-Number(x.estimado);
     sub = d===0 ? 'Real' : `<span class="${d>0?'up':'down'}">${d>0?'+':'−'}${compact(Math.abs(d))}</span> vs est.`;
   }
-  return `<div class="row ${s.pagado?'is-done':''}">
+  return `<div class="row ${s.pagado?'is-done':''}" data-key="g-${x.id}">
     <button class="check" data-act="toggle-gasto" data-id="${x.id}" aria-pressed="${!!s.pagado}" aria-label="${esc(x.nombre)}: pagado">${svg('check')}</button>
     <div class="row-main" data-act="edit-gasto" data-id="${x.id}" role="button" tabindex="0" aria-label="Editar ${esc(x.nombre)}, ${money(v)}${s.pagado?', pagado':''}">
       <div class="row-title">${esc(x.nombre)}</div>
@@ -717,7 +724,7 @@ function gastoRow(x){
 }
 function ingresoRow(x){
   const s=current.ingresos[x.id], v=eff(s.real,x.estimado);
-  return `<div class="row ${s.cobrado?'is-done':''}">
+  return `<div class="row ${s.cobrado?'is-done':''}" data-key="i-${x.id}">
     <button class="check" data-act="toggle-ingreso" data-id="${x.id}" aria-pressed="${!!s.cobrado}" aria-label="${esc(x.nombre)}: cobrado">${svg('check')}</button>
     <div class="row-main" data-act="edit-ingreso" data-id="${x.id}" role="button" tabindex="0" aria-label="Editar ${esc(x.nombre)}, ${money(v)}${s.cobrado?', cobrado':''}">
       <div class="row-title">${esc(x.nombre)}</div>
@@ -782,8 +789,8 @@ function viewMov(t){
   <div class="card">
     <div class="card-h"><h2>Movimientos</h2><span class="sub">${current.movimientos.length} · ${money(t.variables)}</span></div>
     ${days.length? days.map(d=>{ const tot=byDay[d].reduce((a,m)=>a+Number(m.monto),0);
-      return `<div class="day-h"><span>${fmtFecha(d)}</span><span>${money(tot)}</span></div>`+
-      byDay[d].map(m=>`<div class="row"><div class="row-main"><div class="row-title">${esc(m.desc)}</div><div class="row-meta">${chip(m.categoria)}</div></div>
+      return `<div class="day-h" data-key="d-${d}"><span>${fmtFecha(d)}</span><span>${money(tot)}</span></div>`+
+      byDay[d].map(m=>`<div class="row" data-key="m-${m.id}"><div class="row-main"><div class="row-title">${esc(m.desc)}</div><div class="row-meta">${chip(m.categoria)}</div></div>
         <div class="row-amt"><div class="amt">−${money(m.monto)}</div></div><button class="x" data-act="del-mov" data-id="${m.id}" aria-label="Eliminar ${esc(m.desc)}">✕</button></div>`).join('');
     }).join('') : `<div class="empty"><b>Sin movimientos todavía</b>Registrá acá supermercado, nafta, salidas y otros gastos que no son fijos.</div>`}
   </div>`;
@@ -815,7 +822,7 @@ function viewHist(){
     <div class="card"><div class="card-h"><h2>Meses cerrados</h2><span class="sub">${hist.length}</span></div>
     ${hist.map((h,i)=>{ const open=ui.openHist===i; const tasa=h.ingresos?h.ahorro/h.ingresos*100:0;
       const det=h.detalle?.porCat? Object.entries(h.detalle.porCat).sort((a,b)=>b[1]-a[1]) : null;
-      return `<div class="h-item"><div class="h-head" data-act="hist-toggle" data-i="${i}" role="button" tabindex="0" aria-expanded="${open}">
+      return `<div class="h-item" data-key="h-${esc(h.mesLabel)}-${esc(h.guardado||'')}"><div class="h-head" data-act="hist-toggle" data-i="${i}" role="button" tabindex="0" aria-expanded="${open}">
         <div class="h-mes">${esc(h.mesLabel)}<small>Ingresos ${compact(h.ingresos)} · Gastos ${compact(h.gastos)}</small></div>
         <div style="text-align:right"><div class="amt ${h.ahorro>=0?'pos':''}" style="${h.ahorro<0?'color:var(--neg)':''}">${money(h.ahorro)}</div><div class="amt-sub">${tasa.toFixed(1)}% ahorro</div></div>
         </div>
@@ -836,12 +843,44 @@ function render(){
   if(!ui.novedad && dot) dot.remove();
   mb.setAttribute('aria-label', ui.novedad?'Menú (hay novedades)':'Menú');
   const views={resumen:viewResumen,fijos:viewFijos,movimientos:viewMov,historial:viewHist};
-  document.getElementById('app').innerHTML = hero(t) + nav() + views[ui.tab](t) +
+  const app=document.getElementById('app'), nuevo=document.createElement('main');
+  nuevo.innerHTML = hero(t) + nav() + views[ui.tab](t) +
     `<div class="card" style="display:none" id="sm-close"></div>
      <button class="btn block" data-act="cerrar-mes" style="margin-top:4px" id="close-mobile">Cerrar ${esc(current.mesLabel)}</button>`;
+  if(app.querySelector('.hero')) morphHijos(app, nuevo); else app.replaceChildren(...nuevo.childNodes);
   document.getElementById('close-mobile').style.display = matchMedia('(max-width:720px)').matches ? '' : 'none';
   asociarLabels(document.getElementById('app'));
-  if(foco && !document.getElementById('sheet-root').firstChild) enfocarClave(foco);
+  const act=document.activeElement;
+  if(foco && (!act || act===document.body || !act.isConnected) && !document.getElementById('sheet-root').firstChild) enfocarClave(foco);
+}
+/* ---------- Redibujo fino (v1.9) ----------
+   render() arma la pantalla nueva aparte y morphHijos() cambia en la página solo lo distinto: los nodos que no
+   cambiaron quedan iguales (sin saltos de scroll, el foco y lo que estás escribiendo no se pierden, las barras
+   se animan). Las filas llevan data-key (g-, i-, m-, d-, h-) para reconocerlas aunque se agreguen o borren otras.
+   Los campos de formulario conservan lo escrito; para vaciarlos hay que usar form.reset(). */
+const claveNodo = n => n.nodeType===1 ? n.getAttribute('data-key') : null;
+function morphNodo(viejo, nuevo){
+  if(viejo.nodeType!==nuevo.nodeType || viejo.nodeName!==nuevo.nodeName || claveNodo(viejo)!==claveNodo(nuevo)){ viejo.replaceWith(nuevo); return; }
+  if(viejo.nodeType!==1){ if(viejo.nodeValue!==nuevo.nodeValue) viejo.nodeValue=nuevo.nodeValue; return; }
+  for(const a of [...viejo.attributes]) if(!nuevo.hasAttribute(a.name) && !(a.name==='id' && a.value.startsWith('campo-'))) viejo.removeAttribute(a.name);
+  for(const a of nuevo.attributes) if(viejo.getAttribute(a.name)!==a.value) viejo.setAttribute(a.name, a.value);
+  if(viejo.nodeName==='TEXTAREA') return;
+  morphHijos(viejo, nuevo);
+}
+function morphHijos(padre, nuevoPadre){
+  const nuevos=[...nuevoPadre.childNodes], viejos=[...padre.childNodes];
+  const conClave=new Map(), sinClave=[];
+  viejos.forEach(n=>{ const k=claveNodo(n); if(k!=null) conClave.set(k,n); else sinClave.push(n); });
+  let j=0;
+  nuevos.forEach((n,i)=>{
+    const k=claveNodo(n); let par=null;
+    if(k!=null){ par=conClave.get(k)||null; conClave.delete(k); }
+    else while(j<sinClave.length){ const c=sinClave[j++]; if(c.nodeName===n.nodeName){ par=c; break; } }
+    const ref=padre.childNodes[i]||null;
+    if(par){ if(par!==ref) padre.insertBefore(par, ref); morphNodo(par, n); }
+    else padre.insertBefore(n, ref);
+  });
+  while(padre.childNodes.length>nuevos.length) padre.lastChild.remove();
 }
 /* ---------- Accesibilidad (v1.8) ----------
    claveFoco/enfocarClave: después de redibujar, el foco vuelve al mismo control (no salta al principio).
@@ -960,7 +999,7 @@ function openSheet({title, body, actions=[]}){
   form.querySelectorAll('.actions button[type=button]').forEach(b=>b.onclick=()=>run(Number(b.dataset.i)));
   form.querySelectorAll('[data-run]').forEach(b=>b.onclick=()=>{ close(); MENU[b.dataset.run](); });
   const first=form.querySelector('input:not([type=hidden])');
-  if(first && matchMedia('(min-width:721px)').matches) setTimeout(()=>{ if(sheetActual?.form===form) first.focus(); },50);
+  if(first && matchMedia('(min-width:721px)').matches) setTimeout(()=>{ if(sheetActual?.form===form && !form.contains(document.activeElement)) first.focus(); },50);
   else form.focus({preventScroll:true});
 }
 let sheetActual=null; // {form, close, vuelta}: la hoja abierta (Escape la cierra y el foco vuelve a donde estaba)
@@ -1233,6 +1272,7 @@ document.addEventListener('submit', async e=>{
   if(!errores.fecha && mm>=0 && (+fecha.slice(0,4)!==yy || +fecha.slice(5,7)-1!==mm)) avisos.fecha=`Esta fecha no es de ${current.mesLabel}. ¿La registrás igual en este mes?`;
   if(!validarForm(form, errores, avisos)) return;
   current.movimientos.push({id:uid(), desc, monto:Number(monto), categoria:fd.get('categoria'), fecha, ts:Date.now()});
+  form.reset(); delete form.dataset.ok;
   await saveAll(); render(); toast('Gasto registrado');
   document.querySelector('#mov-form [name=desc]')?.focus();
 });
