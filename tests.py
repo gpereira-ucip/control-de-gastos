@@ -20,6 +20,10 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
   - (v1.7) validación en línea: lector de montos (miles, centavos, 1500.50, negativos, letras, 12,500, cifras
     absurdas), errores por campo sin guardar (gasto, ingreso, movimiento, nombre del mes), se limpian al
     escribir, avisos de cifras raras con «Guardar/Agregar igual»; 390 claro y 1280 oscuro
+  - (v1.8) accesibilidad: contraste AA de todo texto visible (4 pestañas, historial abierto, menú, vencimientos),
+    botones con nombre, campos con etiqueta, filas y meses con Tab + Enter/Espacio, foco visible, hojas como
+    diálogo (fondo inerte, Tab no se escapa, Escape cierra y el foco vuelve), tildar con teclado conserva el
+    foco, Ctrl+Z deshace; 390/1280 claro/oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -472,6 +476,147 @@ def validacion(b):
         check(not errs, f'{label}: sin errores {errs}')
         ctx.close()
 
+AUDIT_JS = r"""() => {
+  const cv=document.createElement('canvas'); cv.width=cv.height=1; const cx=cv.getContext('2d',{willReadFrequently:true});
+  const rgba=s=>{ cx.clearRect(0,0,1,1); cx.fillStyle='#000'; cx.fillStyle=s; cx.fillRect(0,0,1,1); const d=cx.getImageData(0,0,1,1).data; return [d[0],d[1],d[2],d[3]/255]; };
+  const over=(t,b)=>{ const a=t[3]; return [t[0]*a+b[0]*(1-a),t[1]*a+b[1]*(1-a),t[2]*a+b[2]*(1-a),1]; };
+  const lum=c=>{ const f=v=>{v/=255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4)}; return .2126*f(c[0])+.7152*f(c[1])+.0722*f(c[2]); };
+  const ratio=(a,b)=>{ const x=lum(a),y=lum(b); return (Math.max(x,y)+.05)/(Math.min(x,y)+.05); };
+  const bgOf=el=>{ const layers=[]; let e=el;
+    while(e && e.nodeType===1){ const cs=getComputedStyle(e);
+      if(cs.backgroundImage && cs.backgroundImage!=='none' && /gradient/.test(cs.backgroundImage)){ // hero: usar el color más claro del degradado
+        const cols=cs.backgroundImage.match(/(rgba?\([^)]*\)|color\([^)]*\)|#[0-9a-f]{3,8})/gi)||[]; let best=null;
+        cols.forEach(c=>{ const v=rgba(c); if(!best||lum(v)>lum(best)) best=v; }); if(best){ layers.push([...best.slice(0,3),1]); break; } }
+      const c=rgba(cs.backgroundColor); if(c[3]>0){ layers.push(c); if(c[3]>=1) break; }
+      e=e.parentElement; }
+    let base=[255,255,255,1]; if(!layers.length || layers[layers.length-1][3]<1){ base=rgba(getComputedStyle(document.body).backgroundColor); }
+    for(let i=layers.length-1;i>=0;i--) base=over(layers[i],base); return base; };
+  const out=[];
+  const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+  const seen=new Set();
+  while(walker.nextNode()){ const n=walker.currentNode; if(!n.textContent.trim()) continue; const el=n.parentElement; if(seen.has(el)) continue; seen.add(el);
+    if(el.closest('svg')||el.closest('[aria-hidden=true]')) continue;
+    const r=el.getBoundingClientRect(); if(!r.width||!r.height) continue;
+    const cs=getComputedStyle(el); if(cs.visibility==='hidden') continue;
+    let op=1; for(let e=el;e&&e.nodeType===1;e=e.parentElement) op*=Number(getComputedStyle(e).opacity);
+    if(op<0.05) continue;
+    const bg=bgOf(el); let fg=rgba(cs.color); fg=over([fg[0],fg[1],fg[2],fg[3]*op],bg);
+    const size=parseFloat(cs.fontSize), bold=Number(cs.fontWeight)>=700;
+    const large= size>=24 || (bold && size>=18.66);
+    const need= large?3:4.5; const rr=ratio(fg,bg);
+    if(rr<need) out.push({t:n.textContent.trim().slice(0,30), cls:el.className, r:Math.round(rr*100)/100, need});
+  }
+  return out;
+}"""
+
+A11Y_SEED = {
+    'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 1000000, 'nota': ''}],
+               'gastos': [{'id': 'g1', 'nombre': 'Luz', 'estimado': 50000, 'categoria': 'servicios', 'vence': 1, 'nota': 'n'},
+                          {'id': 'g2', 'nombre': 'Nafta', 'estimado': 20000, 'categoria': 'transporte', 'vence': 21, 'nota': ''},
+                          {'id': 'g3', 'nombre': 'Super', 'estimado': 20000, 'categoria': 'comida', 'vence': 5, 'nota': ''}]},
+    'current': {'mesLabel': 'Noviembre 2026', 'gastos': {'g1': {'real': 61000, 'pagado': True}, 'g2': {'real': '', 'pagado': False}, 'g3': {'real': '', 'pagado': False}},
+                'ingresos': {'i1': {'real': '', 'cobrado': True}},
+                'movimientos': [{'id': 'm1', 'desc': 'Kiosco', 'monto': 3500, 'categoria': 'ocio', 'fecha': '2026-11-05', 'ts': 1}]},
+    'history': [{'mesLabel': 'Octubre 2026', 'ingresos': 900000, 'gastos': 700000, 'ahorro': 200000, 'guardado': '2026-10-01',
+                 'detalle': {'porCat': {'servicios': 300000, 'comida': 400000}}}],
+}
+
+def foco(page):
+    return page.evaluate("""() => { const a=document.activeElement; if(!a||a===document.body) return null;
+        return {act:a.dataset?.act||null, id:a.dataset?.id||null, tag:a.tagName, inSheet:!!a.closest('.sheet'),
+                outline:getComputedStyle(a).outlineStyle, ow:parseFloat(getComputedStyle(a).outlineWidth)} }""")
+
+def tab_hasta(page, cond, maxn=60):
+    for _ in range(maxn):
+        page.keyboard.press('Tab'); f = foco(page)
+        if f and cond(f): return f
+    return None
+
+def accesibilidad(b):
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark'), (390, 844, 'dark'), (1280, 900, 'light')]:
+        label = f'a11y {w} {theme}'
+        print(f'\n== Accesibilidad (v1.8) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=A11Y_SEED)
+        malos = set()
+        for tab in ['resumen', 'fijos', 'movimientos', 'historial']:
+            page.click(f'.nav [data-tab={tab}]'); page.wait_for_timeout(120)
+            if tab == 'historial': page.click('.h-head'); page.wait_for_timeout(120)
+            for o in page.evaluate(AUDIT_JS): malos.add(f"{o['t']} ({o['r']}<{o['need']})")
+            sin_nombre = page.evaluate("""() => [...document.querySelectorAll('button,[role=button]')].filter(e=>e.offsetParent!==null)
+                .filter(e=>!(e.getAttribute('aria-label')||e.textContent).trim()).map(e=>e.outerHTML.slice(0,60))""")
+            check(not sin_nombre, f'{label} {tab}: todos los botones tienen nombre {sin_nombre}')
+            sin_label = page.evaluate("""() => [...document.querySelectorAll('.inp')].filter(e=>!e.labels?.length && !e.getAttribute('aria-label')).map(e=>e.name)""")
+            check(not sin_label, f'{label} {tab}: todos los campos tienen etiqueta {sin_label}')
+        page.click('.appbar [data-act=menu]'); page.wait_for_timeout(250)
+        for o in page.evaluate(AUDIT_JS): malos.add(f"{o['t']} ({o['r']}<{o['need']})")
+        page.keyboard.press('Escape'); page.wait_for_timeout(100)
+        check(not malos, f'{label}: contraste AA en todos los textos {sorted(malos)}')
+        check(page.locator('.sheet').count() == 0, f'{label}: Escape cierra el menú')
+        check((foco(page) or {}).get('act') == 'menu', f'{label}: el foco vuelve al botón de menú')
+
+        # Teclado en Resumen: Tab hasta la fila de «Nafta», Enter abre la hoja de edición
+        page.click('.nav [data-tab=resumen]'); page.wait_for_timeout(120)
+        page.evaluate("document.activeElement.blur()")
+        f = tab_hasta(page, lambda f: f['act'] == 'edit-gasto' and f['id'] == 'g2')
+        check(f is not None, f'{label}: Tab llega a la fila de un gasto')
+        check(f and f['outline'] != 'none' and f['ow'] >= 2, f'{label}: el foco se ve (contorno {f and f["outline"]})')
+        page.screenshot(path=str(SHOTS / f'a11y-foco-{w}-{theme}.png'))
+        page.keyboard.press('Enter'); page.wait_for_timeout(200)
+        dlg = page.locator('.sheet[role=dialog][aria-modal=true]')
+        check(dlg.count() == 1 and dlg.get_attribute('aria-labelledby') == 'sheet-title', f'{label}: Enter abre la hoja como diálogo con título')
+        check((foco(page) or {}).get('inSheet'), f'{label}: el foco entra en la hoja')
+        check(page.evaluate("document.getElementById('app').inert && document.querySelector('.appbar').inert"), f'{label}: el fondo queda inerte')
+        dentro = True
+        for _ in range(14):
+            page.keyboard.press('Tab'); dentro = dentro and bool((foco(page) or {}).get('inSheet'))
+        for _ in range(3):
+            page.keyboard.press('Shift+Tab'); dentro = dentro and bool((foco(page) or {}).get('inSheet'))
+        check(dentro, f'{label}: Tab y Shift+Tab no se escapan de la hoja')
+        page.screenshot(path=str(SHOTS / f'a11y-hoja-{w}-{theme}.png'))
+        page.keyboard.press('Escape'); page.wait_for_timeout(120)
+        f = foco(page)
+        check(page.locator('.sheet').count() == 0 and f and f['act'] == 'edit-gasto' and f['id'] == 'g2', f'{label}: Escape cierra y el foco vuelve a la fila {f}')
+        check(not page.evaluate("document.getElementById('app').inert"), f'{label}: el fondo vuelve a estar activo')
+
+        # Espacio en el check: tilda y el foco queda en el mismo gasto
+        page.keyboard.press('Shift+Tab'); f = foco(page)
+        check(f and f['act'] == 'toggle-gasto' and f['id'] == 'g2', f'{label}: Shift+Tab va al tilde del gasto')
+        page.keyboard.press('Space'); page.wait_for_timeout(200)
+        f = foco(page)
+        check(get(page, 'current')['gastos']['g2']['pagado'] is True, f'{label}: Espacio tilda el pago')
+        check(f and f['act'] == 'toggle-gasto' and f['id'] == 'g2', f'{label}: el foco sigue en el mismo tilde tras redibujar')
+        check(page.get_attribute('[data-act=toggle-gasto][data-id=g2]', 'aria-pressed') == 'true', f'{label}: aria-pressed indica pagado')
+        page.keyboard.press('Enter'); page.wait_for_timeout(200)
+        check(get(page, 'current')['gastos']['g2']['pagado'] is False, f'{label}: Enter lo destilda')
+
+        # Historial: Enter despliega el mes y aria-expanded lo indica
+        page.click('.nav [data-tab=historial]'); page.wait_for_timeout(120)
+        if page.get_attribute('.h-head', 'aria-expanded') == 'true': page.click('.h-head'); page.wait_for_timeout(120)
+        check(page.get_attribute('.h-head', 'aria-expanded') == 'false', f'{label}: el mes arranca plegado')
+        page.focus('.h-head'); page.keyboard.press('Enter'); page.wait_for_timeout(120)
+        check(page.get_attribute('.h-head', 'aria-expanded') == 'true' and page.locator('.h-detail').count() == 1, f'{label}: Enter despliega el mes')
+        check((foco(page) or {}).get('act') == 'hist-toggle', f'{label}: el foco queda en el mes')
+        page.keyboard.press(' '); page.wait_for_timeout(120)
+        check(page.get_attribute('.h-head', 'aria-expanded') == 'false', f'{label}: Espacio lo pliega')
+        check(page.get_attribute('.nav [data-tab=historial]', 'aria-current') == 'page', f'{label}: la pestaña activa se anuncia')
+
+        # Ctrl+Z deshace un borrado mientras se ve el aviso
+        page.click('.nav [data-tab=movimientos]'); page.wait_for_timeout(120)
+        page.focus('[data-act=del-mov][data-id=m1]'); page.keyboard.press('Enter'); page.wait_for_timeout(200)
+        check(len(get(page, 'current')['movimientos']) == 0, f'{label}: se elimina el movimiento con el teclado')
+        page.keyboard.press('Control+z'); page.wait_for_timeout(250)
+        check([m['id'] for m in get(page, 'current')['movimientos']] == ['m1'], f'{label}: Ctrl+Z lo recupera')
+        page.wait_for_timeout(2400)
+        check(page.locator('#toast-undo').count() == 0, f'{label}: el «Deshacer» oculto no queda en el recorrido del teclado')
+
+        # Etiquetas: tocar «Monto» enfoca su campo
+        page.click('#mov-form label:has-text("Monto")')
+        check(page.evaluate("document.activeElement.name") == 'monto', f'{label}: la etiqueta «Monto» enfoca su campo')
+        no_hscroll(page, w, label)
+        check(not errs, f'{label}: sin errores {errs}')
+        ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -495,6 +640,7 @@ with sync_playwright() as pw:
     respaldo_texto(b)
     deshacer(b)
     validacion(b)
+    accesibilidad(b)
     primera_vez(b)
     b.close()
 

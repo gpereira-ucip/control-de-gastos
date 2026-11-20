@@ -19,8 +19,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#F3F4F6; --surface:#FFFFFF; --surface-2:#F1F3F6; --text:#0F172A; --muted:#64748B;
-  --border:#E5E7EB; --primary:#0F766E; --undo-ink:#5EEAD4; --primary-ink:#FFFFFF; --pos:#059669; --neg:#DC2626; --warn:#D97706;
+  --bg:#F3F4F6; --surface:#FFFFFF; --surface-2:#F1F3F6; --text:#0F172A; --muted:#5B6576;
+  --border:#E5E7EB; --primary:#0F766E; --undo-ink:#5EEAD4; --primary-ink:#FFFFFF; --pos:#047857; --neg:#C81E1E; --warn:#B45309; --chip-mix:52%;
   --hero-a:#0F172A; --hero-b:#16384A; --shadow:0 1px 2px rgba(15,23,42,.04),0 8px 24px rgba(15,23,42,.06);
   --radius:18px;
 }
@@ -136,10 +136,10 @@ button{cursor:pointer}
 .amt-sub{font-size:11.5px;color:var(--muted);margin-top:2px}
 .amt-sub .up{color:var(--neg)}.amt-sub .down{color:var(--pos)}
 .chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:99px;
-  background:color-mix(in srgb,var(--c) 14%,transparent);color:color-mix(in srgb,var(--c) 85%,var(--text))}
+  background:color-mix(in srgb,var(--c) 14%,transparent);color:color-mix(in srgb,var(--c) var(--chip-mix,85%),var(--text))}
 .chip::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--c)}
 .tag{font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:6px;background:var(--surface-2);color:var(--muted)}
-.tag.warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.tag.warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:color-mix(in srgb,var(--warn) 82%,var(--text))}
 .tag.danger{background:color-mix(in srgb,var(--neg) 14%,transparent);color:var(--neg)}
 .x{background:none;border:none;color:var(--muted);width:30px;height:30px;border-radius:8px;flex:none;font-size:16px}
 .x:hover{background:var(--surface-2);color:var(--neg)}
@@ -237,6 +237,7 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 .toast.show.has-undo{pointer-events:auto;padding:6px 6px 6px 18px}
 .toast-undo{background:none;border:0;color:var(--undo-ink);font:inherit;font-weight:800;padding:8px 12px;border-radius:9px;cursor:pointer;white-space:nowrap}
 .toast-undo:hover,.toast-undo:focus-visible{background:color-mix(in srgb,var(--undo-ink) 18%,transparent);outline:none}
+.toast-undo:focus-visible{box-shadow:inset 0 0 0 2px var(--undo-ink)}
 @media (min-width:721px){.toast{bottom:28px}}
 @keyframes up{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -251,17 +252,26 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 .nov-v h4 small{color:var(--muted);font-weight:600;font-size:12.5px}
 .nov-v ul{margin:0;padding-left:18px;color:var(--text);font-size:13.5px;line-height:1.5}
 .nov-v li+li{margin-top:3px}
+/* Accesibilidad (v1.8): foco visible con teclado, filas y meses navegables */
+:focus-visible{outline:2.5px solid var(--primary);outline-offset:2px}
+.inp:focus-visible{outline:none}
+.hero :focus-visible{outline-color:#5EEAD4}
+.row-main:focus-visible,.h-head:focus-visible{outline-offset:-2px;border-radius:10px}
+.row-main:focus-visible{outline-offset:2px}
+.sheet:focus{outline:none}
+.sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 .ver-foot{font-size:11.5px;color:var(--muted);text-align:center;margin:10px 0 0}
 </style>
 </head>
 <body>
 <header class="appbar">
   <div class="wrap">
-    <div class="logo">$</div>
+    <div class="logo" aria-hidden="true">$</div>
     <div class="brand">
       <b>Control Mensual</b>
       <button class="mes-btn" data-act="rename-mes"><span id="mes-label">—</span>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
+        <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
     </div>
     <button class="btn hide-sm" data-act="cerrar-mes">Cerrar mes</button>
     <button class="icon-btn" data-act="menu" aria-label="Menú"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></button>
@@ -275,8 +285,15 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '1.7';
+const VERSION = '1.8';
 const CHANGELOG = [
+  {v:'1.8', fecha:'20 nov 2026', items:[
+    'Se puede usar toda la app con el teclado: Tab recorre botones, filas y meses; Enter o Espacio los abre, y se ve claramente dónde estás parado.',
+    'Las hojas se cierran con Escape y, al cerrarlas, volvés al mismo lugar donde estabas. Mientras están abiertas, el teclado no se escapa al fondo.',
+    'Al tildar un pago con el teclado, el foco queda en ese mismo gasto (no salta al principio).',
+    'En la compu, Ctrl+Z (o Cmd+Z) deshace un borrado mientras se ve el aviso.',
+    'Mejor contraste en modo claro (textos grises, montos en verde, etiquetas de categoría) y nombres claros para lectores de pantalla en botones, gráficos y campos.'
+  ]},
   {v:'1.7', fecha:'20 nov 2026', items:[
     'Los formularios avisan en el mismo campo si falta algo o un dato no cierra: nombre vacío, monto negativo, letras en vez de números, día de vencimiento fuera de 1 a 31 o una cifra demasiado grande.',
     'Si un monto parece raro pero puede estar bien (por ejemplo, 10 veces el estimado, más que todos los ingresos del mes o un movimiento con fecha de otro mes), te pregunta y podés tocar «Guardar igual».',
@@ -650,7 +667,7 @@ const IC = {
   reset:'<path d="M4 4v6h6M20 12a8 8 0 01-14.9 4M4 12a8 8 0 0114.9-4"/>',
   spark:'<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/>'
 };
-const svg = (k, cls='') => `<svg viewBox="0 0 24 24" class="${cls}">${IC[k]}</svg>`;
+const svg = (k, cls='') => `<svg viewBox="0 0 24 24" class="${cls}" aria-hidden="true" focusable="false">${IC[k]}</svg>`;
 
 /* ---------- Render ---------- */
 function ringSVG(p, size=84, stroke=8, color='#2DD4BF', track='rgba(255,255,255,.14)'){
@@ -667,20 +684,20 @@ function hero(t){
         <div class="hero-num ${t.ahorro<0?'neg':''}">${money(t.ahorro)}</div>
         <span class="pill ${t.ahorro>=0?'pos':'neg'}">${t.ahorro>=0?'▲':'▼'} ${(t.tasa*100).toFixed(1)}% de los ingresos</span>
       </div>
-      <div class="ring">${ringSVG(pPag)}<div class="lbl"><div>${t.nPag}/${t.nFijos}<small>PAGADOS</small></div></div></div>
+      <div class="ring" role="img" aria-label="${t.nPag} de ${t.nFijos} gastos fijos pagados">${ringSVG(pPag)}<div class="lbl" aria-hidden="true"><div>${t.nPag}/${t.nFijos}<small>PAGADOS</small></div></div></div>
     </div>
     <div class="hero-stats">
       <div class="hs"><span>Ingresos</span><b>${compact(t.ingresos)}</b></div>
       <div class="hs"><span>Gastos fijos</span><b>${compact(t.fijos)}</b></div>
       <div class="hs"><span>Variables</span><b>${compact(t.variables)}</b></div>
     </div>
-    <div class="bar"><i style="width:${(pPag*100).toFixed(1)}%"></i></div>
+    <div class="bar" aria-hidden="true"><i style="width:${(pPag*100).toFixed(1)}%"></i></div>
     <div class="bar-cap"><span>Pagado ${money(t.pagado)}</span><span>Pendiente ${money(t.fijos-t.pagado)}</span></div>
   </section>`;
 }
 function nav(){
   const tabs=[['resumen','Resumen'],['fijos','Gastos fijos'],['movimientos','Movimientos'],['historial','Historial']];
-  return `<nav class="nav">${tabs.map(([k,l])=>`<button class="${ui.tab===k?'on':''}" data-act="tab" data-tab="${k}">${svg(k)}<span>${l}</span></button>`).join('')}</nav>`;
+  return `<nav class="nav" aria-label="Secciones">${tabs.map(([k,l])=>`<button class="${ui.tab===k?'on':''}" data-act="tab" data-tab="${k}"${ui.tab===k?' aria-current="page"':''}>${svg(k)}<span>${l}</span></button>`).join('')}</nav>`;
 }
 function gastoRow(x){
   const s=current.gastos[x.id], v=eff(s.real,x.estimado);
@@ -690,23 +707,23 @@ function gastoRow(x){
     sub = d===0 ? 'Real' : `<span class="${d>0?'up':'down'}">${d>0?'+':'−'}${compact(Math.abs(d))}</span> vs est.`;
   }
   return `<div class="row ${s.pagado?'is-done':''}">
-    <button class="check" data-act="toggle-gasto" data-id="${x.id}" aria-label="Marcar pagado">${svg('check')}</button>
-    <div class="row-main" data-act="edit-gasto" data-id="${x.id}">
+    <button class="check" data-act="toggle-gasto" data-id="${x.id}" aria-pressed="${!!s.pagado}" aria-label="${esc(x.nombre)}: pagado">${svg('check')}</button>
+    <div class="row-main" data-act="edit-gasto" data-id="${x.id}" role="button" tabindex="0" aria-label="Editar ${esc(x.nombre)}, ${money(v)}${s.pagado?', pagado':''}">
       <div class="row-title">${esc(x.nombre)}</div>
       <div class="row-meta">${chip(x.categoria)}${venceTag(x,s)}${x.nota?`<span>${esc(x.nota)}</span>`:''}</div>
     </div>
-    <div class="row-amt" data-act="edit-gasto" data-id="${x.id}"><div class="amt">${money(v)}</div><div class="amt-sub">${sub}</div></div>
+    <div class="row-amt" data-act="edit-gasto" data-id="${x.id}" aria-hidden="true"><div class="amt">${money(v)}</div><div class="amt-sub">${sub}</div></div>
   </div>`;
 }
 function ingresoRow(x){
   const s=current.ingresos[x.id], v=eff(s.real,x.estimado);
   return `<div class="row ${s.cobrado?'is-done':''}">
-    <button class="check" data-act="toggle-ingreso" data-id="${x.id}" aria-label="Marcar cobrado">${svg('check')}</button>
-    <div class="row-main" data-act="edit-ingreso" data-id="${x.id}">
+    <button class="check" data-act="toggle-ingreso" data-id="${x.id}" aria-pressed="${!!s.cobrado}" aria-label="${esc(x.nombre)}: cobrado">${svg('check')}</button>
+    <div class="row-main" data-act="edit-ingreso" data-id="${x.id}" role="button" tabindex="0" aria-label="Editar ${esc(x.nombre)}, ${money(v)}${s.cobrado?', cobrado':''}">
       <div class="row-title">${esc(x.nombre)}</div>
       <div class="row-meta">${s.cobrado?'<span class="tag" style="color:var(--pos)">Cobrado</span>':'<span class="tag">Pendiente</span>'}${x.nota?`<span>${esc(x.nota)}</span>`:''}</div>
     </div>
-    <div class="row-amt" data-act="edit-ingreso" data-id="${x.id}"><div class="amt pos">${money(v)}</div><div class="amt-sub">${(s.real!==''&&s.real!=null)?'Real':'Estimado'}</div></div>
+    <div class="row-amt" data-act="edit-ingreso" data-id="${x.id}" aria-hidden="true"><div class="amt pos">${money(v)}</div><div class="amt-sub">${(s.real!==''&&s.real!=null)?'Real':'Estimado'}</div></div>
   </div>`;
 }
 function donut(t){
@@ -717,8 +734,8 @@ function donut(t){
     const s=`<circle cx="70" cy="70" r="${r}" fill="none" stroke="${cat(k).color}" stroke-width="${sw}" stroke-dasharray="${Math.max(0,len-gap)} ${C}" stroke-dashoffset="${-acc}"/>`;
     acc+=len; return s; }).join('');
   return `<div class="donut-wrap">
-    <div class="donut"><svg viewBox="0 0 140 140"><circle cx="70" cy="70" r="${r}" fill="none" stroke="var(--surface-2)" stroke-width="${sw}"/>${arcs}</svg>
-      <div class="c"><div><b>${compact(t.gastos)}</b><span>gasto total</span></div></div></div>
+    <div class="donut" role="img" aria-label="Gasto total ${money(t.gastos)}: ${entries.slice(0,7).map(([k,v])=>`${cat(k).label} ${Math.round(v/t.gastos*100)}%`).join(', ')}"><svg aria-hidden="true" viewBox="0 0 140 140"><circle cx="70" cy="70" r="${r}" fill="none" stroke="var(--surface-2)" stroke-width="${sw}"/>${arcs}</svg>
+      <div class="c" aria-hidden="true"><div><b>${compact(t.gastos)}</b><span>gasto total</span></div></div></div>
     <div class="legend">${entries.slice(0,7).map(([k,v])=>`<div class="lg"><i style="background:${cat(k).color}"></i><span>${cat(k).label}</span><b>${compact(v)}</b><em>${Math.round(v/t.gastos*100)}%</em></div>`).join('')}</div>
   </div>`;
 }
@@ -740,10 +757,10 @@ function viewFijos(t){
   let items=config.gastos;
   if(ui.filtro==='pend') items=items.filter(x=>!current.gastos[x.id].pagado);
   if(ui.filtro==='pag') items=items.filter(x=>current.gastos[x.id].pagado);
-  const f=(k,l)=>`<button class="${ui.filtro===k?'on':''}" data-act="filtro" data-f="${k}">${l}</button>`;
+  const f=(k,l)=>`<button class="${ui.filtro===k?'on':''}" data-act="filtro" data-f="${k}" aria-pressed="${ui.filtro===k}">${l}</button>`;
   return `<div class="card">
     <div class="card-h"><div><h2>Gastos fijos</h2><div class="sub">${t.nPag} de ${t.nFijos} pagados · total ${money(t.fijos)}</div></div>
-      <div class="seg">${f('todos','Todos')}${f('pend','Pendientes')}${f('pag','Pagados')}</div></div>
+      <div class="seg" role="group" aria-label="Filtrar gastos">${f('todos','Todos')}${f('pend','Pendientes')}${f('pag','Pagados')}</div></div>
     ${items.length? items.map(gastoRow).join('') : `<div class="empty">Nada para mostrar con este filtro.</div>`}
     <button class="add-row" data-act="add-gasto">+ Agregar gasto fijo</button>
   </div>`;
@@ -759,7 +776,7 @@ function viewMov(t){
       <div class="field"><label>Monto</label><input class="inp money" name="monto" inputmode="decimal" placeholder="$ 0"></div>
       <div class="field"><label>Categoría</label><select class="inp" name="categoria">${catOptions('comida')}</select></div>
       <div class="field"><label>Fecha</label><input class="inp" type="date" name="fecha" value="${todayISO()}"></div>
-      <div class="field full" style="justify-content:flex-end"><label class="hide-sm">&nbsp;</label><button class="btn" style="justify-content:center;padding:12px 18px">Agregar</button></div>
+      <div class="field full" style="justify-content:flex-end"><span class="hide-sm" aria-hidden="true" style="font-size:12px">&nbsp;</span><button class="btn" style="justify-content:center;padding:12px 18px">Agregar</button></div>
     </form>
   </div>
   <div class="card">
@@ -767,7 +784,7 @@ function viewMov(t){
     ${days.length? days.map(d=>{ const tot=byDay[d].reduce((a,m)=>a+Number(m.monto),0);
       return `<div class="day-h"><span>${fmtFecha(d)}</span><span>${money(tot)}</span></div>`+
       byDay[d].map(m=>`<div class="row"><div class="row-main"><div class="row-title">${esc(m.desc)}</div><div class="row-meta">${chip(m.categoria)}</div></div>
-        <div class="row-amt"><div class="amt">−${money(m.monto)}</div></div><button class="x" data-act="del-mov" data-id="${m.id}" aria-label="Eliminar">✕</button></div>`).join('');
+        <div class="row-amt"><div class="amt">−${money(m.monto)}</div></div><button class="x" data-act="del-mov" data-id="${m.id}" aria-label="Eliminar ${esc(m.desc)}">✕</button></div>`).join('');
     }).join('') : `<div class="empty"><b>Sin movimientos todavía</b>Registrá acá supermercado, nafta, salidas y otros gastos que no son fijos.</div>`}
   </div>`;
 }
@@ -784,7 +801,7 @@ function histChart(){
       <rect x="${cx+2}" y="${y(h.gastos)}" width="${bw}" height="${H-bottom-y(h.gastos)}" rx="4" fill="var(--neg)" opacity=".75"><title>Gastos ${money(h.gastos)}</title></rect>
       <text x="${cx}" y="${H-6}" text-anchor="middle">${m>=0?MESES[m].slice(0,3):esc(h.mesLabel.slice(0,3))}</text>`; }).join('');
   return `<div class="card"><div class="card-h"><h2>Evolución</h2><div class="legend-inline"><span><i style="background:var(--primary)"></i>Ingresos</span><span><i style="background:var(--neg)"></i>Gastos</span></div></div>
-    <div class="chart"><svg viewBox="0 0 ${W} ${H}">${grid}${bars}</svg></div></div>`;
+    <div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Ingresos y gastos de los últimos ${data.length} meses cerrados">${grid}${bars}</svg></div></div>`;
 }
 function viewHist(){
   if(!hist.length) return `<div class="card"><div class="empty"><b>Todavía no cerraste ningún mes</b>Cuando toques “Cerrar mes”, el resumen se guarda acá y arranca el mes siguiente.</div></div>`;
@@ -798,7 +815,7 @@ function viewHist(){
     <div class="card"><div class="card-h"><h2>Meses cerrados</h2><span class="sub">${hist.length}</span></div>
     ${hist.map((h,i)=>{ const open=ui.openHist===i; const tasa=h.ingresos?h.ahorro/h.ingresos*100:0;
       const det=h.detalle?.porCat? Object.entries(h.detalle.porCat).sort((a,b)=>b[1]-a[1]) : null;
-      return `<div class="h-item"><div class="h-head" data-act="hist-toggle" data-i="${i}">
+      return `<div class="h-item"><div class="h-head" data-act="hist-toggle" data-i="${i}" role="button" tabindex="0" aria-expanded="${open}">
         <div class="h-mes">${esc(h.mesLabel)}<small>Ingresos ${compact(h.ingresos)} · Gastos ${compact(h.gastos)}</small></div>
         <div style="text-align:right"><div class="amt ${h.ahorro>=0?'pos':''}" style="${h.ahorro<0?'color:var(--neg)':''}">${money(h.ahorro)}</div><div class="amt-sub">${tasa.toFixed(1)}% ahorro</div></div>
         </div>
@@ -811,7 +828,9 @@ function viewHist(){
 }
 function render(){
   const t=totals();
+  const foco=claveFoco(document.activeElement);
   document.getElementById('mes-label').textContent=current.mesLabel;
+  document.querySelector('.mes-btn').setAttribute('aria-label', `Mes: ${current.mesLabel}. Cambiar nombre`);
   const mb=document.querySelector('.appbar [data-act=menu]'); const dot=mb.querySelector('.dot');
   if(ui.novedad && !dot) mb.insertAdjacentHTML('beforeend','<span class="dot" aria-hidden="true"></span>');
   if(!ui.novedad && dot) dot.remove();
@@ -821,7 +840,55 @@ function render(){
     `<div class="card" style="display:none" id="sm-close"></div>
      <button class="btn block" data-act="cerrar-mes" style="margin-top:4px" id="close-mobile">Cerrar ${esc(current.mesLabel)}</button>`;
   document.getElementById('close-mobile').style.display = matchMedia('(max-width:720px)').matches ? '' : 'none';
+  asociarLabels(document.getElementById('app'));
+  if(foco && !document.getElementById('sheet-root').firstChild) enfocarClave(foco);
 }
+/* ---------- Accesibilidad (v1.8) ----------
+   claveFoco/enfocarClave: después de redibujar, el foco vuelve al mismo control (no salta al principio).
+   asociarLabels: cada <label> de un .field queda unido a su campo (lectores de pantalla y tocar la etiqueta). */
+const ATTRS_FOCO=['act','id','tab','f','i'];
+function claveFoco(el){
+  if(!el || el===document.body || !el.closest) return null;
+  const a=el.closest('[data-act]');
+  if(a && (a.closest('#app')||a.closest('.appbar'))) return '[data-act]'+ATTRS_FOCO.filter(k=>a.dataset[k]!=null).map(k=>`[data-${k}="${CSS.escape(a.dataset[k])}"]`).join('');
+  if(el.id) return '#'+CSS.escape(el.id);
+  return null;
+}
+function enfocarClave(sel){
+  if(!sel) return false;
+  const el=[...document.querySelectorAll(sel)].find(e=>e.offsetParent!==null || e===document.activeElement);
+  if(el){ el.focus({preventScroll:true}); return true; }
+  return false;
+}
+let labelN=0;
+function asociarLabels(root){
+  root.querySelectorAll('.field').forEach(f=>{
+    const l=f.querySelector(':scope > label'), c=f.querySelector(':scope > .inp');
+    if(!l || !c) return;
+    if(!c.id) c.id='campo-'+(++labelN);
+    l.htmlFor=c.id;
+  });
+}
+const FOCUSABLES='a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+/* Enter o Espacio activan filas y meses (role=button); Ctrl/Cmd+Z = «Deshacer» mientras se ve el aviso. */
+document.addEventListener('keydown', e=>{
+  if(sheetActual){
+    if(e.key==='Escape'){ e.preventDefault(); sheetActual.close(); return; }
+    if(e.key==='Tab'){
+      const f=[...sheetActual.form.querySelectorAll(FOCUSABLES)].filter(x=>x.offsetParent!==null);
+      if(!f.length){ e.preventDefault(); return; }
+      const a=document.activeElement, first=f[0], last=f[f.length-1];
+      if(!sheetActual.form.contains(a)){ e.preventDefault(); first.focus(); }
+      else if(e.shiftKey && (a===first || a===sheetActual.form)){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && a===last){ e.preventDefault(); first.focus(); }
+    }
+    return;
+  }
+  const t=e.target;
+  if((e.key==='Enter'||e.key===' ') && t.matches?.('[role=button][data-act]') && !e.repeat){ e.preventDefault(); t.click(); return; }
+  if((e.ctrlKey||e.metaKey) && !e.shiftKey && String(e.key||'').toLowerCase()==='z' && toastUndo && !t.matches?.('input,textarea,select')){
+    const b=document.getElementById('toast-undo'); if(b){ e.preventDefault(); b.click(); } }
+});
 
 /* ---------- Validación en línea ----------
    validarForm(form, errores, avisos): {campo: mensaje}. Con errores no guarda. Los avisos (cifras raras)
@@ -874,21 +941,30 @@ document.addEventListener('input', e=>{
 /* ---------- Hojas (modales) ---------- */
 function openSheet({title, body, actions=[]}){
   const root=document.getElementById('sheet-root');
-  root.innerHTML=`<div class="scrim"><form class="sheet" novalidate><div class="grabber"></div>
-    <h3>${title}<button type="button" class="x" data-close>✕</button></h3>${body}
+  const previa=sheetActual, vuelta = previa ? previa.vuelta : claveFoco(document.activeElement);
+  if(previa) previa.close(true);
+  root.innerHTML=`<div class="scrim"><form class="sheet" novalidate role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1"><div class="grabber" aria-hidden="true"></div>
+    <h3><span id="sheet-title">${title}</span><button type="button" class="x" data-close aria-label="Cerrar">✕</button></h3>${body}
     ${actions.length?`<div class="actions">${actions.map((a,i)=>`<button type="${a.primary?'submit':'button'}" class="btn ${a.cls||''}" data-i="${i}">${a.label}</button>`).join('')}</div>`:''}
   </form></div>`;
   const scrim=root.firstElementChild, form=scrim.querySelector('form');
-  const close=()=>{root.innerHTML='';};
+  const fondo=[document.querySelector('.appbar'), document.getElementById('app')];
+  fondo.forEach(n=>n && (n.inert=true));
+  const close=(sinFoco)=>{ if(sheetActual?.form!==form) return; sheetActual=null; root.innerHTML=''; fondo.forEach(n=>n && (n.inert=false));
+    if(!sinFoco && !enfocarClave(vuelta)) document.querySelector('.appbar [data-act=menu]')?.focus({preventScroll:true}); };
+  sheetActual={form, close, vuelta};
+  asociarLabels(form);
   scrim.addEventListener('click',e=>{ if(e.target===scrim||e.target.closest('[data-close]')) close(); });
   const run=async i=>{ const r=await actions[i].fn(form, new FormData(form)); if(r!==false) close(); };
   form.addEventListener('submit',e=>{ e.preventDefault(); const i=actions.findIndex(a=>a.primary); if(i>=0) run(i); });
   form.querySelectorAll('.actions button[type=button]').forEach(b=>b.onclick=()=>run(Number(b.dataset.i)));
   form.querySelectorAll('[data-run]').forEach(b=>b.onclick=()=>{ close(); MENU[b.dataset.run](); });
-  const first=form.querySelector('input:not([type=hidden])'); if(first && matchMedia('(min-width:721px)').matches) setTimeout(()=>first.focus(),50);
-  document.addEventListener('keydown',function k(e){ if(e.key==='Escape'){close();document.removeEventListener('keydown',k);} });
+  const first=form.querySelector('input:not([type=hidden])');
+  if(first && matchMedia('(min-width:721px)').matches) setTimeout(()=>{ if(sheetActual?.form===form) first.focus(); },50);
+  else form.focus({preventScroll:true});
 }
-const closeSheet=()=>document.getElementById('sheet-root').innerHTML='';
+let sheetActual=null; // {form, close, vuelta}: la hoja abierta (Escape la cierra y el foco vuelve a donde estaba)
+const closeSheet=()=>{ if(sheetActual) sheetActual.close(); else document.getElementById('sheet-root').innerHTML=''; };
 
 function sheetGasto(id){
   const x = id ? config.gastos.find(g=>g.id===id) : {nombre:'',estimado:'',categoria:'otros',vence:'',nota:''};
@@ -1102,9 +1178,10 @@ function toast(msg, undo){
   el.classList.toggle('has-undo', !!toastUndo);
   el.setAttribute('role','status');
   el.classList.add('show'); clearTimeout(toastT);
-  toastT=setTimeout(()=>{ el.classList.remove('show'); toastUndo=null; }, toastUndo ? UNDO_MS : 2200);
+  el.setAttribute('aria-live','polite');
+  toastT=setTimeout(()=>{ el.classList.remove('show'); toastUndo=null; el.querySelector('#toast-undo')?.remove(); }, toastUndo ? UNDO_MS : 2200);
   if(toastUndo) el.querySelector('#toast-undo').onclick = async ev=>{
-    ev.stopPropagation(); const f=toastUndo; if(!f) return; toastUndo=null; clearTimeout(toastT); el.classList.remove('show');
+    ev.stopPropagation(); const f=toastUndo; if(!f) return; toastUndo=null; clearTimeout(toastT); el.classList.remove('show'); ev.currentTarget.remove();
     try{ await f(); }catch(err){ toast('No se pudo deshacer'); } };
 }
 /* Vuelve a poner un elemento borrado en su lugar (si no está ya). */
