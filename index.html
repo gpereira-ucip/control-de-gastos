@@ -220,6 +220,11 @@ button{cursor:pointer}
 textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.4;word-break:break-all}
 .form-err{margin-top:10px;padding:10px 12px;border-radius:11px;font-size:13px;font-weight:600;background:color-mix(in srgb,var(--neg) 12%,transparent);color:var(--neg)}
 .form-ok{margin-top:10px;font-size:13px;font-weight:600;color:var(--pos)}
+.f-msg{--mc:var(--neg);font-size:12.5px;font-weight:600;line-height:1.35;color:var(--mc);display:flex;gap:5px;align-items:flex-start}
+.f-msg::before{content:"!";flex:none;width:15px;height:15px;border-radius:50%;background:var(--mc);color:var(--surface);font-size:11px;font-weight:800;display:grid;place-items:center;margin-top:1px}
+.f-msg.warn{--mc:color-mix(in srgb,var(--warn) 78%,var(--text))}
+.inp[aria-invalid=true]{border-color:var(--neg);box-shadow:0 0 0 3px color-mix(in srgb,var(--neg) 14%,transparent)}
+.inp.avisada{border-color:var(--warn)}
 .sheet-note{color:var(--muted);font-size:13.5px;margin:0 0 12px}
 .nudge-txt b{display:block;font-size:15px;margin-bottom:2px}
 .nudge-txt p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.45}
@@ -270,8 +275,13 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '1.6';
+const VERSION = '1.7';
 const CHANGELOG = [
+  {v:'1.7', fecha:'20 nov 2026', items:[
+    'Los formularios avisan en el mismo campo si falta algo o un dato no cierra: nombre vacío, monto negativo, letras en vez de números, día de vencimiento fuera de 1 a 31 o una cifra demasiado grande.',
+    'Si un monto parece raro pero puede estar bien (por ejemplo, 10 veces el estimado, más que todos los ingresos del mes o un movimiento con fecha de otro mes), te pregunta y podés tocar «Guardar igual».',
+    'Montos más fáciles: entiende 12.500, 12.500,50 y también 1500.50; y te avisa si escribiste 12,500 pensando en miles.'
+  ]},
   {v:'1.6', fecha:'19 nov 2026', items:[
     'Al eliminar un gasto fijo, un ingreso, un movimiento o un mes del historial, el aviso de abajo trae el botón «Deshacer»: tenés unos segundos para recuperarlo tal como estaba, en el mismo lugar.',
     'Si te arrepentiste de un borrado, ya no hace falta volver a cargarlo a mano.'
@@ -316,8 +326,44 @@ const compact = n => { n=Number(n)||0; const a=Math.abs(n);
   if(a>=1e6) return '$'+(n/1e6).toLocaleString('es-AR',{maximumFractionDigits:1})+'M';
   if(a>=1e3) return '$'+Math.round(n/1e3)+'k'; return '$'+Math.round(n); };
 const numStr = n => (n===''||n==null) ? '' : Number(n).toLocaleString('es-AR',{maximumFractionDigits:2});
-const parseMonto = s => { if(s==null) return ''; s=String(s).replace(/[^\d,.-]/g,''); if(!s) return '';
-  s=s.replace(/\./g,'').replace(',','.'); const n=Number(s); return isNaN(n)?'':n; };
+/* leerMonto(texto) → {n} (número o '' si está vacío) o {error}. Miles con punto, centavos con coma (o punto + 1-2 cifras). */
+const MONTO_MAX = 1e10;
+function leerMonto(raw){
+  let s=String(raw??'').replace(/\s|\$|ars/gi,'');
+  if(!s) return {n:''};
+  const ej='Escribí solo números, por ejemplo 12.500 o 12.500,50';
+  if(/[^\d.,-]/.test(s)) return {error:ej};
+  let neg=false; if(s.startsWith('-')){ neg=true; s=s.slice(1); }
+  if(s.includes('-')) return {error:ej};
+  s=s.replace(/[.,]+$/,'');
+  if(!/\d/.test(s)) return {error:ej};
+  let ent=s, dec='';
+  const c=s.split(',');
+  if(c.length>2){
+    if(s.includes('.') || !c[0] || c[0].length>3 || c.slice(1).some(g=>g.length!==3)) return {error:'Revisá las comas: los centavos van con una sola coma (12.500,50)'};
+    ent=c.join('');
+  } else if(c.length===2){
+    ent=c[0]; dec=c[1];
+    if(dec.includes('.')) return {error:'Revisá el formato: los miles van con punto y los centavos con coma (12.500,50)'};
+    if(dec.length===3 && !ent.includes('.') && ent.length<=3) return {error:`¿Quisiste decir ${ent}.${dec}? Los miles van con punto; los centavos, con coma y 2 cifras`};
+    if(dec.length>2) return {error:'Los centavos van con hasta 2 cifras'};
+  } else {
+    const p=s.split('.');
+    if(p.length===2 && p[1].length>=1 && p[1].length<=2){ ent=p[0]; dec=p[1]; }
+  }
+  if(ent.includes('.')){
+    const g=ent.split('.');
+    if(!g[0] || g[0].length>3 || g.slice(1).some(x=>x.length!==3)) return {error:'Revisá los puntos: los miles van de a 3 cifras (1.250.000)'};
+    ent=g.join('');
+  }
+  if(ent==='') ent='0';
+  if(!/^\d+$/.test(ent) || (dec && !/^\d+$/.test(dec))) return {error:ej};
+  const n=Number(ent+(dec?'.'+dec:''));
+  if(neg && n>0) return {error:'El monto no puede ser negativo'};
+  if(n>MONTO_MAX) return {error:'Es una cifra demasiado grande: revisá si sobra algún cero'};
+  return {n};
+}
+const parseMonto = s => { const r=leerMonto(s); return r.error ? '' : r.n; };
 const uid = () => Math.random().toString(36).slice(2,9);
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const todayISO = () => { const d=new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOffset()); return d.toISOString().slice(0,10); };
@@ -708,9 +754,9 @@ function viewMov(t){
   const days=Object.keys(byDay);
   return `<div class="card">
     <div class="card-h"><h2>Registrar gasto</h2><span class="sub">Compras y gastos variables del mes</span></div>
-    <form id="mov-form" class="qa" autocomplete="off">
-      <div class="field full"><label>Descripción</label><input class="inp" name="desc" placeholder="Ej: Supermercado" required></div>
-      <div class="field"><label>Monto</label><input class="inp money" name="monto" inputmode="decimal" placeholder="$ 0" required></div>
+    <form id="mov-form" class="qa" autocomplete="off" novalidate>
+      <div class="field full"><label>Descripción</label><input class="inp" name="desc" placeholder="Ej: Supermercado" maxlength="80"></div>
+      <div class="field"><label>Monto</label><input class="inp money" name="monto" inputmode="decimal" placeholder="$ 0"></div>
       <div class="field"><label>Categoría</label><select class="inp" name="categoria">${catOptions('comida')}</select></div>
       <div class="field"><label>Fecha</label><input class="inp" type="date" name="fecha" value="${todayISO()}"></div>
       <div class="field full" style="justify-content:flex-end"><label class="hide-sm">&nbsp;</label><button class="btn" style="justify-content:center;padding:12px 18px">Agregar</button></div>
@@ -777,6 +823,54 @@ function render(){
   document.getElementById('close-mobile').style.display = matchMedia('(max-width:720px)').matches ? '' : 'none';
 }
 
+/* ---------- Validación en línea ----------
+   validarForm(form, errores, avisos): {campo: mensaje}. Con errores no guarda. Los avisos (cifras raras)
+   se muestran una vez: si se vuelve a enviar lo mismo, sigue («Guardar igual»). */
+function campoMsg(form, name, msg, tipo){
+  const inp=form.querySelector(`[name="${name}"]`); if(!inp) return;
+  const f=inp.closest('.field')||inp.parentElement;
+  const el=document.createElement('div'); el.className='f-msg'+(tipo==='warn'?' warn':''); el.id=`msg-${name}-${uid()}`;
+  el.setAttribute('role', tipo==='warn'?'status':'alert'); el.textContent=msg; f.appendChild(el);
+  if(tipo==='warn') inp.classList.add('avisada'); else inp.setAttribute('aria-invalid','true');
+  inp.setAttribute('aria-describedby', el.id);
+}
+function limpiarMsgs(form, name){
+  const sel = name ? `[name="${name}"]` : '.inp';
+  form.querySelectorAll(sel).forEach(inp=>{
+    const f=inp.closest('.field')||inp.parentElement; f.querySelectorAll('.f-msg').forEach(m=>m.remove());
+    inp.removeAttribute('aria-invalid'); inp.classList.remove('avisada'); inp.removeAttribute('aria-describedby'); });
+}
+function botonPrincipal(form){ return form.querySelector('button[type=submit]') || form.querySelector('button:not([type])'); }
+function quitarAvisos(form){
+  if(form.dataset.ok===undefined) return; delete form.dataset.ok;
+  form.querySelectorAll('.f-msg.warn').forEach(m=>{ const inp=m.parentElement.querySelector('.inp'); inp?.classList.remove('avisada'); inp?.removeAttribute('aria-describedby'); m.remove(); });
+  const b=botonPrincipal(form); if(b?.dataset.label){ b.textContent=b.dataset.label; }
+}
+function validarForm(form, errores={}, avisos={}){
+  const firma=JSON.stringify([...new FormData(form)].map(([k,v])=>[k, form.querySelector(`[name="${k}"]`)?.classList.contains('money') ? leerMonto(v).n : v]));
+  const yaAvisado = form.dataset.ok===firma;
+  quitarAvisos(form); limpiarMsgs(form);
+  const ek=Object.keys(errores);
+  if(ek.length){ ek.forEach(k=>campoMsg(form,k,errores[k])); form.querySelector(`[name="${ek[0]}"]`)?.focus(); return false; }
+  const ak=Object.keys(avisos);
+  if(!ak.length || yaAvisado) return true;
+  ak.forEach(k=>campoMsg(form,k,avisos[k],'warn')); form.dataset.ok=firma;
+  const b=botonPrincipal(form); if(b){ b.dataset.label ??= b.textContent; b.textContent=(b.dataset.label==='Agregar'?'Agregar':'Guardar')+' igual'; }
+  return false;
+}
+function montoCampo(fd, name, errores, requerido){
+  const raw=fd.get(name); const r=leerMonto(raw);
+  if(r.error){ errores[name]=r.error; return ''; }
+  if(requerido && r.n===''){ errores[name]='Ingresá el monto'; return ''; }
+  if(requerido && r.n===0){ errores[name]='El monto tiene que ser mayor a $ 0'; return ''; }
+  return r.n;
+}
+document.addEventListener('input', e=>{
+  const form=e.target.closest?.('form'); if(!form || !e.target.name) return;
+  if(e.target.getAttribute('aria-invalid')) limpiarMsgs(form, e.target.name);
+  quitarAvisos(form);
+});
+
 /* ---------- Hojas (modales) ---------- */
 function openSheet({title, body, actions=[]}){
   const root=document.getElementById('sheet-root');
@@ -809,16 +903,20 @@ function sheetGasto(id){
       if(!current.gastos[id]) current.gastos[id] = (current===cur && st) ? st : {real:'',pagado:false};
       await saveAll(); render(); toast('Gasto recuperado'); }); }});
   actions.push({label:id?'Guardar':'Agregar',primary:true,fn:async(form,fd)=>{
-    const nombre=fd.get('nombre').trim(); if(!nombre){ form.nombre.focus(); return false; }
-    const data={nombre, categoria:fd.get('categoria'), estimado:Number(parseMonto(fd.get('estimado'))||0),
-      vence: (()=>{const v=parseInt(fd.get('vence'));return v>=1&&v<=31?v:'';})(), nota:fd.get('nota').trim()};
-    const real=parseMonto(fd.get('real'));
+    const nombre=fd.get('nombre').trim(), errores={}, avisos={};
+    if(!nombre) errores.nombre='Escribí un nombre para el gasto';
+    const vt=String(fd.get('vence')||'').trim(); let vence='';
+    if(vt){ if(!/^\d{1,2}$/.test(vt) || +vt<1 || +vt>31) errores.vence='Elegí un día entre 1 y 31'; else vence=+vt; }
+    const est=montoCampo(fd,'estimado',errores), real=montoCampo(fd,'real',errores);
+    if(est!=='' && real!=='' && est>0 && real>est*10) avisos.real=`Es más de 10 veces el estimado (${money(est)}). ¿Está bien?`;
+    if(!validarForm(form, errores, avisos)) return false;
+    const data={nombre, categoria:fd.get('categoria'), estimado:Number(est||0), vence, nota:fd.get('nota').trim()};
     if(id){ Object.assign(x,data); current.gastos[id].real=real; }
     else { const nid=uid(); config.gastos.push({id:nid,...data}); current.gastos[nid]={real,pagado:false}; }
     await saveAll(); render(); toast(id?'Cambios guardados':'Gasto agregado');
   }});
   openSheet({title:id?'Editar gasto fijo':'Nuevo gasto fijo', actions, body:`<div class="fields">
-    <div class="field full"><label>Nombre</label><input class="inp" name="nombre" value="${esc(x.nombre)}" placeholder="Ej: Prepaga"></div>
+    <div class="field full"><label>Nombre</label><input class="inp" name="nombre" value="${esc(x.nombre)}" placeholder="Ej: Prepaga" maxlength="60" autocomplete="off"></div>
     <div class="field"><label>Categoría</label><select class="inp" name="categoria">${catOptions(x.categoria)}</select></div>
     <div class="field"><label>Vence el día</label><input class="inp" name="vence" inputmode="numeric" value="${esc(x.vence)}" placeholder="1–31"></div>
     <div class="field"><label>Estimado mensual</label><input class="inp money" name="estimado" inputmode="decimal" value="${numStr(x.estimado)}" placeholder="$ 0"></div>
@@ -839,15 +937,18 @@ function sheetIngreso(id){
       if(!current.ingresos[id]) current.ingresos[id] = (current===cur && st) ? st : {real:'',cobrado:false};
       await saveAll(); render(); toast('Ingreso recuperado'); }); }});
   actions.push({label:id?'Guardar':'Agregar',primary:true,fn:async(form,fd)=>{
-    const nombre=fd.get('nombre').trim(); if(!nombre){ form.nombre.focus(); return false; }
-    const data={nombre, estimado:Number(parseMonto(fd.get('estimado'))||0), nota:fd.get('nota').trim()};
-    const real=parseMonto(fd.get('real'));
+    const nombre=fd.get('nombre').trim(), errores={}, avisos={};
+    if(!nombre) errores.nombre='Escribí de dónde viene el ingreso';
+    const est=montoCampo(fd,'estimado',errores), real=montoCampo(fd,'real',errores);
+    if(est!=='' && real!=='' && est>0 && real>est*10) avisos.real=`Es más de 10 veces el estimado (${money(est)}). ¿Está bien?`;
+    if(!validarForm(form, errores, avisos)) return false;
+    const data={nombre, estimado:Number(est||0), nota:fd.get('nota').trim()};
     if(id){ Object.assign(x,data); current.ingresos[id].real=real; }
     else { const nid=uid(); config.ingresos.push({id:nid,...data}); current.ingresos[nid]={real,cobrado:false}; }
     await saveAll(); render(); toast(id?'Cambios guardados':'Ingreso agregado');
   }});
   openSheet({title:id?'Editar ingreso':'Nuevo ingreso', actions, body:`<div class="fields">
-    <div class="field full"><label>Fuente</label><input class="inp" name="nombre" value="${esc(x.nombre)}" placeholder="Ej: Guardias extra"></div>
+    <div class="field full"><label>Fuente</label><input class="inp" name="nombre" value="${esc(x.nombre)}" placeholder="Ej: Guardias extra" maxlength="60" autocomplete="off"></div>
     <div class="field"><label>Estimado mensual</label><input class="inp money" name="estimado" inputmode="decimal" value="${numStr(x.estimado)}" placeholder="$ 0"></div>
     <div class="field"><label>Real este mes</label><input class="inp money" name="real" inputmode="decimal" value="${numStr(s.real)}" placeholder="${numStr(x.estimado)||'$ 0'}"></div>
     <div class="field full"><label>Nota</label><input class="inp" name="nota" value="${esc(x.nota)}" placeholder="Opcional"></div>
@@ -873,8 +974,8 @@ function sheetCerrar(){
     }}]});
 }
 function sheetRename(){
-  openSheet({title:'Nombre del mes', body:`<div class="field"><label>Mes y año</label><input class="inp" name="mes" value="${esc(current.mesLabel)}" placeholder="Ej: Noviembre 2026"></div>`,
-    actions:[{label:'Guardar',primary:true,fn:async(f,fd)=>{ const v=fd.get('mes').trim(); if(!v) return false; current.mesLabel=v; await saveAll(); render(); }}]});
+  openSheet({title:'Nombre del mes', body:`<div class="field"><label>Mes y año</label><input class="inp" name="mes" value="${esc(current.mesLabel)}" placeholder="Ej: Noviembre 2026" maxlength="40"></div>`,
+    actions:[{label:'Guardar',primary:true,fn:async(f,fd)=>{ const v=fd.get('mes').trim(); if(!validarForm(f, v?{}:{mes:'Escribí el mes y el año'})) return false; current.mesLabel=v; await saveAll(); render(); }}]});
 }
 
 /* ---------- Menú ---------- */
@@ -1046,14 +1147,20 @@ document.addEventListener('click', async e=>{
 document.addEventListener('submit', async e=>{
   if(e.target.id!=='mov-form') return;
   e.preventDefault(); const fd=new FormData(e.target);
-  const monto=parseMonto(fd.get('monto')); const desc=fd.get('desc').trim();
-  if(!desc || !monto){ toast('Completá descripción y monto'); return; }
-  current.movimientos.push({id:uid(), desc, monto:Number(monto), categoria:fd.get('categoria'), fecha:fd.get('fecha')||todayISO(), ts:Date.now()});
+  const form=e.target, desc=fd.get('desc').trim(), fecha=String(fd.get('fecha')||''), errores={}, avisos={};
+  if(!desc) errores.desc='Escribí qué compraste o pagaste';
+  const monto=montoCampo(fd,'monto',errores,true);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(fecha) || isNaN(new Date(fecha+'T12:00:00'))) errores.fecha='Elegí una fecha';
+  if(monto!==''){ const ing=totals().ingresos; if(ing>0 && monto>ing) avisos.monto=`Es más que todos los ingresos del mes (${money(ing)}). ¿Está bien?`; }
+  const [mm,yy]=parseMes(current.mesLabel);
+  if(!errores.fecha && mm>=0 && (+fecha.slice(0,4)!==yy || +fecha.slice(5,7)-1!==mm)) avisos.fecha=`Esta fecha no es de ${current.mesLabel}. ¿La registrás igual en este mes?`;
+  if(!validarForm(form, errores, avisos)) return;
+  current.movimientos.push({id:uid(), desc, monto:Number(monto), categoria:fd.get('categoria'), fecha, ts:Date.now()});
   await saveAll(); render(); toast('Gasto registrado');
   document.querySelector('#mov-form [name=desc]')?.focus();
 });
 document.addEventListener('focusout', e=>{
-  if(e.target.classList?.contains('money')){ const v=parseMonto(e.target.value); if(v!=='') e.target.value=numStr(v); }
+  if(e.target.classList?.contains('money')){ const r=leerMonto(e.target.value); if(!r.error && r.n!=='' && e.target.value!==numStr(r.n)){ e.target.value=numStr(r.n); } }
 });
 document.getElementById('file-import').addEventListener('change', async e=>{
   const f=e.target.files[0]; if(!f) return;

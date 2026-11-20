@@ -17,6 +17,9 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     sin tocar los datos, guarda 'pre-restauracion' antes de reemplazar; 390/1280 claro/oscuro
   - (v1.6) «Deshacer» en el aviso al eliminar gasto fijo, ingreso, movimiento o mes del historial: vuelve
     a su lugar con su estado (pagado/real), queda en IndexedDB, vence a los 6 s; 390/1280 claro/oscuro
+  - (v1.7) validación en línea: lector de montos (miles, centavos, 1500.50, negativos, letras, 12,500, cifras
+    absurdas), errores por campo sin guardar (gasto, ingreso, movimiento, nombre del mes), se limpian al
+    escribir, avisos de cifras raras con «Guardar/Agregar igual»; 390 claro y 1280 oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -162,7 +165,7 @@ def doble_copia(b):
     page.keyboard.press('Escape'); page.wait_for_timeout(100)
     # 2) Un cambio se escribe en las dos
     page.click('.nav [data-tab=movimientos]')
-    page.fill('#mov-form [name=desc]', 'Verdulería'); page.fill('#mov-form [name=monto]', '4.321')
+    page.fill('#mov-form [name=desc]', 'Verdulería'); page.fill('#mov-form [name=monto]', '4.321'); page.fill('#mov-form [name=fecha]', '2026-10-15')
     page.click('#mov-form button'); page.wait_for_timeout(200)
     check(any(m['monto'] == 4321 for m in json.loads(page.evaluate(IDB_READ, 'current'))['movimientos']), 'movimiento nuevo también en IndexedDB')
     # 3) Se borra localStorage: al reabrir se recupera todo desde IndexedDB
@@ -294,7 +297,7 @@ def respaldo_texto(b):
                 page.keyboard.press('Escape'); page.wait_for_timeout(100)
                 # cambiar datos y restaurar desde el texto (con texto alrededor, como en un mail)
                 page.click('.nav [data-tab=movimientos]')
-                page.fill('#mov-form [name=desc]', 'Kiosco'); page.fill('#mov-form [name=monto]', '999')
+                page.fill('#mov-form [name=desc]', 'Kiosco'); page.fill('#mov-form [name=monto]', '999'); page.fill('#mov-form [name=fecha]', '2026-10-15')
                 page.click('#mov-form button'); page.wait_for_timeout(200)
                 check(len(get(page, 'current')['movimientos']) == 2, 'cambio local antes de restaurar')
                 page.click('.appbar [data-act=menu]'); page.click('[data-run=pegar]'); page.wait_for_selector('.sheet textarea')
@@ -378,6 +381,97 @@ def deshacer(b):
         check(not errs, f'{label}: sin errores {errs}')
         ctx.close()
 
+def validacion(b):
+    print('\n== Validación en línea (v1.7)')
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    casos = {'12.500': 12500, '12.500,50': 12500.5, '1500.50': 1500.5, '1.250.000': 1250000, '$ 3.000': 3000,
+             '1,5': 1.5, '': '', ',50': 0.5, '1,250,000': 1250000, '7.': 7}
+    errores = ['-500', 'abc', '12,500', '1,234', '12.50.0', '1.2345', '5-3', '99999999999', '1,5,0', '12,345.6']
+    ctx, page, errs = new_page(b, 390, 844, seed={})
+    for t, v in casos.items():
+        r = page.evaluate('t => leerMonto(t)', t)
+        check(r.get('n') == v and 'error' not in r, f'leerMonto({t!r}) = {v!r} (dio {r})')
+    for t in errores:
+        r = page.evaluate('t => leerMonto(t)', t)
+        check('error' in r, f'leerMonto({t!r}) da error ({r.get("error")})')
+    check(page.evaluate("parseMonto('-500')") == '', 'parseMonto ignora negativos')
+    ctx.close()
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark')]:
+        label = f'{w} {theme}'
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=V10)
+        cfg0, cur0 = get(page, 'config'), get(page, 'current')
+        # Gasto fijo nuevo con todo mal
+        page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+        page.click('[data-act=add-gasto]'); page.wait_for_selector('.sheet')
+        page.fill('.sheet [name=vence]', '40'); page.fill('.sheet [name=estimado]', '-500'); page.fill('.sheet [name=real]', 'abc')
+        page.click('.sheet button[type=submit]'); page.wait_for_timeout(200)
+        check(page.locator('.sheet').count() == 1, f'{label}: con errores la hoja queda abierta')
+        for n in ['nombre', 'vence', 'estimado', 'real']:
+            check(page.locator(f'.sheet [name={n}][aria-invalid=true]').count() == 1, f'{label}: error marcado en {n}')
+        check(page.locator('.sheet .f-msg:not(.warn)').count() == 4, f'{label}: 4 mensajes en línea')
+        check('negativo' in page.inner_text('.sheet'), f'{label}: dice que no puede ser negativo')
+        check(get(page, 'config') == cfg0, f'{label}: nada guardado con errores')
+        no_hscroll(page, w, label + ' hoja con errores')
+        page.screenshot(path=str(SHOTS / f'validacion-gasto-{w}-{theme}.png'))
+        page.fill('.sheet [name=nombre]', 'Internet'); page.wait_for_timeout(50)
+        check(page.locator('.sheet [name=nombre][aria-invalid]').count() == 0 and page.locator('.sheet .f-msg').count() == 3, f'{label}: al escribir se limpia el error del campo')
+        page.fill('.sheet [name=vence]', '15'); page.fill('.sheet [name=estimado]', '20.000'); page.fill('.sheet [name=real]', '250000')
+        page.click('.sheet button[type=submit]'); page.wait_for_timeout(200)
+        check(page.locator('.sheet .f-msg.warn').count() == 1 and page.locator('.sheet button[type=submit]').inner_text() == 'Agregar igual', f'{label}: aviso de 10 veces el estimado con «Agregar igual»')
+        check(len(get(page, 'config')['gastos']) == 2, f'{label}: el aviso no guarda todavía')
+        page.screenshot(path=str(SHOTS / f'validacion-aviso-{w}-{theme}.png'))
+        page.click('.sheet button[type=submit]'); page.wait_for_timeout(250)
+        cfg = get(page, 'config'); g = cfg['gastos'][-1]
+        check(page.locator('.sheet').count() == 0 and g['nombre'] == 'Internet' and g['vence'] == 15 and g['estimado'] == 20000, f'{label}: «Guardar igual» guarda el gasto')
+        check(get(page, 'current')['gastos'][g['id']]['real'] == 250000, f'{label}: monto real guardado')
+        # Editar: cambiar el monto quita el aviso y vuelve el botón
+        page.click(f'.row-main[data-act=edit-gasto][data-id="{g["id"]}"]'); page.wait_for_selector('.sheet')
+        page.click('.sheet button[type=submit]'); page.wait_for_timeout(150)
+        check(page.locator('.sheet .f-msg.warn').count() == 1, f'{label}: aviso al editar')
+        page.fill('.sheet [name=real]', '21.000'); page.wait_for_timeout(50)
+        check(page.locator('.sheet .f-msg').count() == 0 and page.locator('.sheet button[type=submit]').inner_text() == 'Guardar', f'{label}: al corregir se va el aviso')
+        page.click('.sheet button[type=submit]'); page.wait_for_timeout(200)
+        check(page.locator('.sheet').count() == 0 and get(page, 'current')['gastos'][g['id']]['real'] == 21000, f'{label}: guarda directo sin aviso')
+        # Ingreso sin nombre
+        page.click('.nav [data-tab=resumen]'); page.wait_for_timeout(150)
+        page.click('.row-main[data-act=edit-ingreso][data-id=i1]'); page.wait_for_selector('.sheet')
+        page.fill('.sheet [name=nombre]', ''); page.fill('.sheet [name=estimado]', '1.2345')
+        page.click('.sheet button[type=submit]'); page.wait_for_timeout(150)
+        check(page.locator('.sheet [aria-invalid=true]').count() == 2, f'{label}: ingreso sin nombre y monto mal escrito')
+        check(get(page, 'config')['ingresos'] == cfg0['ingresos'], f'{label}: ingreso sin cambios')
+        page.keyboard.press('Escape'); page.wait_for_timeout(100)
+        # Movimientos
+        page.click('.nav [data-tab=movimientos]'); page.wait_for_timeout(150)
+        page.click('#mov-form button'); page.wait_for_timeout(150)
+        check(page.locator('#mov-form [aria-invalid=true]').count() == 2, f'{label}: movimiento vacío marca descripción y monto')
+        page.fill('#mov-form [name=desc]', 'Kiosco'); page.fill('#mov-form [name=monto]', '0')
+        page.click('#mov-form button'); page.wait_for_timeout(150)
+        check('mayor a' in page.inner_text('#mov-form'), f'{label}: monto 0 no se acepta')
+        page.fill('#mov-form [name=monto]', '12,500'); page.click('#mov-form button'); page.wait_for_timeout(150)
+        check('12.500' in page.inner_text('#mov-form'), f'{label}: sugiere 12.500 para «12,500»')
+        no_hscroll(page, w, label + ' movimiento con error')
+        page.screenshot(path=str(SHOTS / f'validacion-mov-{w}-{theme}.png'))
+        check(len(get(page, 'current')['movimientos']) == 1, f'{label}: nada registrado con errores')
+        # Fecha de otro mes (los datos son de Octubre 2026) + monto mayor a los ingresos
+        page.fill('#mov-form [name=monto]', '2000000'); page.fill('#mov-form [name=fecha]', '2026-11-03')
+        page.click('#mov-form button'); page.wait_for_timeout(150)
+        check(page.locator('#mov-form .f-msg.warn').count() == 2 and page.inner_text('#mov-form button') == 'Agregar igual', f'{label}: avisos de fecha de otro mes y monto mayor a ingresos')
+        page.screenshot(path=str(SHOTS / f'validacion-mov-aviso-{w}-{theme}.png'))
+        page.click('#mov-form button'); page.wait_for_timeout(200)
+        movs = get(page, 'current')['movimientos']
+        check(len(movs) == 2 and movs[-1]['monto'] == 2000000 and movs[-1]['fecha'] == '2026-11-03', f'{label}: «Agregar igual» registra')
+        page.fill('#mov-form [name=desc]', 'Pan'); page.fill('#mov-form [name=monto]', '1500.50'); page.fill('#mov-form [name=fecha]', '2026-10-20')
+        page.click('#mov-form button'); page.wait_for_timeout(200)
+        check(get(page, 'current')['movimientos'][-1]['monto'] == 1500.5, f'{label}: 1500.50 se registra directo como 1500,5')
+        # Nombre del mes vacío
+        page.evaluate('sheetRename()'); page.wait_for_selector('.sheet')
+        page.fill('.sheet [name=mes]', ''); page.click('.sheet button[type=submit]'); page.wait_for_timeout(150)
+        check(page.locator('.sheet [name=mes][aria-invalid=true]').count() == 1 and get(page, 'current')['mesLabel'] == 'Octubre 2026', f'{label}: nombre del mes vacío no se guarda')
+        page.keyboard.press('Escape')
+        check(json.loads(page.evaluate(IDB_READ, 'current'))['movimientos'] == get(page, 'current')['movimientos'], f'{label}: IndexedDB al día')
+        check(not errs, f'{label}: sin errores {errs}')
+        ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -400,6 +494,7 @@ with sync_playwright() as pw:
     aviso_respaldo(b)
     respaldo_texto(b)
     deshacer(b)
+    validacion(b)
     primera_vez(b)
     b.close()
 
