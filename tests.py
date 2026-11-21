@@ -28,6 +28,11 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     la barra «Pagado» es el mismo nodo (anima); filtro «Pendientes» quita solo esa fila; borrar un movimiento
     conserva los nodos de los demás; lo escrito en «Registrar gasto» sobrevive a un redibujo y se vacía al
     agregar; cambiar de pestaña sigue andando; 390/1280 claro/oscuro
+  - (v2.0) calendario del mes en «Gastos fijos»: la lista sigue siendo la vista por defecto; grilla que arranca
+    en lunes, con los días del mes; puntos por estado (pagado, pendiente, vence pronto, vencido) calculados con
+    la fecha de hoy; día 31 en un mes de 30 cae el último día; tocar un día muestra sus gastos y se pueden tildar
+    ahí (mismo nodo, guardado); «Sin día de vencimiento» lista los que no tienen día; flechas del teclado;
+    nombres para lectores de pantalla; contraste AA; datos sin cambios; 390/1280 claro/oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -102,7 +107,7 @@ def flujo(b, w, h, theme):
     check(any(m['monto'] == 12500 for m in movs), f'{label}: movimiento guardado con monto 12500')
     # novedades desde el menú
     page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet')
-    check(page.locator('.ver-foot').inner_text().find('1.') >= 0, f'{label}: versión visible en el menú')
+    check(page.evaluate('VERSION') in page.locator('.ver-foot').inner_text(), f'{label}: versión visible en el menú')
     page.click('[data-run=novedades]'); page.wait_for_selector('.nov'); page.wait_for_timeout(500)
     page.screenshot(path=str(SHOTS / f'novedades-{w}-{theme}.png'))
     page.keyboard.press('Escape'); page.wait_for_timeout(100)
@@ -689,6 +694,85 @@ def redibujo(b):
         check(not errs, f'{label}: sin errores {errs}')
         ctx.close()
 
+def calendario(b):
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    import datetime
+    hoy = datetime.date.today()
+    MES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+    import calendar as pycal
+    n = pycal.monthrange(hoy.year, hoy.month)[1]
+    d_venc = 1 if hoy.day > 1 else None                 # día ya pasado (si hoy no es 1)
+    d_fut = min(n, hoy.day + 10) if hoy.day + 10 <= n else None
+    gs = [{'id': 'ga', 'nombre': 'Luz de prueba', 'estimado': 40000, 'categoria': 'servicios', 'vence': hoy.day, 'nota': ''},
+          {'id': 'gb', 'nombre': 'Gas de prueba', 'estimado': 30000, 'categoria': 'servicios', 'vence': hoy.day, 'nota': ''},
+          {'id': 'gc', 'nombre': 'Cuota de prueba', 'estimado': 90000, 'categoria': 'educacion', 'vence': 31, 'nota': ''},
+          {'id': 'gd', 'nombre': 'Sin fecha de prueba', 'estimado': 15000, 'categoria': 'hogar', 'vence': '', 'nota': ''}]
+    if d_venc: gs.append({'id': 'ge', 'nombre': 'Atrasado de prueba', 'estimado': 20000, 'categoria': 'hogar', 'vence': d_venc, 'nota': ''})
+    est = {x['id']: {'real': '', 'pagado': False} for x in gs}; est['gb']['pagado'] = True
+    seed = {'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 900000, 'nota': ''}], 'gastos': gs},
+            'current': {'mesLabel': f'{MES[hoy.month-1]} {hoy.year}', 'gastos': est, 'ingresos': {'i1': {'real': '', 'cobrado': False}}, 'movimientos': []},
+            'history': []}
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark'), (390, 844, 'dark'), (1280, 900, 'light')]:
+        label = f'calendario {w} {theme}'
+        print(f'\n== Calendario del mes (v2.0) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=seed)
+        antes = get(page, 'config')
+        page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+        check(page.get_attribute('[data-act=vista][data-f=lista]', 'aria-pressed') == 'true' and page.locator('.cal').count() == 0, f'{label}: la lista es la vista por defecto')
+        page.click('[data-act=vista][data-f=cal]'); page.wait_for_timeout(200)
+        check(page.locator('.cal-d').count() == n, f'{label}: {n} días en la grilla')
+        primero = page.evaluate("[...document.querySelector('.cal').children].findIndex(e=>e.classList.contains('cal-d'))")
+        check(primero == datetime.date(hoy.year, hoy.month, 1).weekday(), f'{label}: la semana arranca en lunes (día 1 en columna {primero})')
+        dh = f'.cal-d[data-i="{hoy.day}"]'
+        check(page.get_attribute(dh, 'aria-pressed') == 'true' and 'hoy' in page.get_attribute(dh, 'class'), f'{label}: hoy está elegido y marcado')
+        check(page.locator(f'{dh} .cal-dots i').count() == 2 and page.locator(f'{dh} .cal-dots i.ok').count() == 1 and page.locator(f'{dh} .cal-dots i.hoy').count() == 1,
+              f'{label}: hoy tiene un punto pagado y uno «vence hoy»')
+        check(page.inner_text(f'{dh} .cal-amt') == '$40k', f'{label}: el día muestra lo que falta pagar')
+        check(page.locator('[data-key=g-ga]').count() == 1 and page.locator('[data-key=g-gb]').count() == 1, f'{label}: debajo se ven los gastos de hoy')
+        check(page.locator(f'.cal-d[data-i="{n}"] .cal-dots i').count() == 1, f'{label}: el día 31 cae en el último día del mes ({n})')
+        if d_venc and d_venc != hoy.day:
+            check(page.locator(f'.cal-d[data-i="{d_venc}"] .cal-dots i.vencido').count() == 1 and 'e-vencido' in page.get_attribute(f'.cal-d[data-i="{d_venc}"]', 'class'), f'{label}: lo atrasado se ve vencido')
+        lbl = page.get_attribute(dh, 'aria-label')
+        check('Luz de prueba vence hoy' in lbl and 'Gas de prueba pagado' in lbl and 'hoy' in lbl, f'{label}: el día tiene nombre para lectores de pantalla ({lbl})')
+        check(page.locator('.day-h', has_text='Sin día de vencimiento').count() == 1 and page.locator('[data-key=g-gd]').count() == 1, f'{label}: «Sin día de vencimiento» lista el gasto sin día')
+        page.screenshot(path=str(SHOTS / f'calendario-{w}-{theme}.png'), full_page=True)
+        # Tildar desde el calendario: mismo nodo, se guarda, el día pasa a pagado
+        page.evaluate("document.querySelector('[data-key=g-ga]').__marca=1")
+        page.click('[data-act=toggle-gasto][data-id=ga]'); page.wait_for_timeout(200)
+        check(get(page, 'current')['gastos']['ga']['pagado'] is True, f'{label}: tildar desde el calendario guarda')
+        check(page.evaluate("!!document.querySelector('[data-key=g-ga]').__marca"), f'{label}: la fila es el mismo nodo')
+        check(page.inner_text(f'{dh} .cal-amt') == '✓' and page.locator(f'{dh} .cal-dots i.ok').count() == 2, f'{label}: el día queda como pagado')
+        # Elegir otro día
+        page.click(f'.cal-d[data-i="{n}"]'); page.wait_for_timeout(150)
+        check(page.get_attribute(f'.cal-d[data-i="{n}"]', 'aria-pressed') == 'true' and page.locator('[data-key=g-gc]').count() == 1 and page.locator('[data-key=g-ga]').count() == 0,
+              f'{label}: tocar el día {n} muestra su gasto')
+        vacio = next(d for d in range(1, n + 1) if d not in (hoy.day, n, d_venc))
+        page.click(f'.cal-d[data-i="{vacio}"]'); page.wait_for_timeout(150)
+        check(page.locator('#app .empty', has_text='Nada vence este día').count() == 1, f'{label}: día sin vencimientos')
+        # Teclado: flechas
+        page.focus(f'.cal-d[data-i="{vacio}"]')
+        page.keyboard.press('ArrowRight' if vacio < n else 'ArrowLeft'); page.wait_for_timeout(120)
+        esp = vacio + 1 if vacio < n else vacio - 1
+        check(page.evaluate('document.activeElement.dataset.i') == str(esp) and page.get_attribute(f'.cal-d[data-i="{esp}"]', 'aria-pressed') == 'true', f'{label}: la flecha mueve al día siguiente')
+        if esp + 7 <= n:
+            page.keyboard.press('ArrowDown'); page.wait_for_timeout(120)
+            check(page.evaluate('document.activeElement.dataset.i') == str(esp + 7), f'{label}: flecha abajo salta una semana')
+        # Editar desde el calendario abre la hoja
+        page.click(f'.cal-d[data-i="{hoy.day}"]'); page.wait_for_timeout(120)
+        page.click('[data-key=g-ga] .row-main'); page.wait_for_selector('.sheet')
+        check(page.locator('.sheet [name=vence]').count() == 1, f'{label}: tocar el gasto abre su hoja')
+        page.keyboard.press('Escape'); page.wait_for_timeout(150)
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en el calendario {[(o["t"], o["r"]) for o in malos]}')
+        # Volver a la lista y pestañas
+        page.click('[data-act=vista][data-f=lista]'); page.wait_for_timeout(150)
+        check(page.locator('.cal').count() == 0 and page.locator('#app .row').count() == len(gs), f'{label}: vuelve a la lista')
+        check(get(page, 'config') == antes, f'{label}: la configuración no cambia')
+        no_hscroll(page, w, label)
+        page.click('[data-act=vista][data-f=cal]'); page.wait_for_timeout(150); no_hscroll(page, w, label + ' (calendario)')
+        check(not errs, f'{label}: sin errores {errs}')
+        ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -714,6 +798,7 @@ with sync_playwright() as pw:
     validacion(b)
     accesibilidad(b)
     redibujo(b)
+    calendario(b)
     primera_vez(b)
     b.close()
 

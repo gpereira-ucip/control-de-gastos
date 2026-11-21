@@ -154,6 +154,28 @@ button{cursor:pointer}
 .seg button{border:none;background:none;padding:6px 11px;border-radius:8px;font-size:12.5px;font-weight:700;color:var(--muted)}
 .seg button.on{background:var(--surface);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.1)}
 
+/* Calendario del mes (v2.0) */
+.vista-bar{display:flex;justify-content:flex-end;margin:0 0 12px}
+.cal-sem,.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.cal-sem{margin-bottom:4px}
+.cal-sem span{text-align:center;font-size:11px;font-weight:800;color:var(--muted);letter-spacing:.04em}
+.cal-d{position:relative;min-width:0;height:58px;border:1.5px solid transparent;border-radius:11px;background:none;color:var(--text);
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:3px;padding:6px 2px 4px;font:inherit;cursor:pointer;transition:background .15s,border-color .15s}
+.cal-d:hover{border-color:var(--border)}
+.cal-d.con{background:var(--surface-2)}
+.cal-d.hoy .cal-n{color:var(--primary);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:2px}
+.cal-d.sel{background:color-mix(in srgb,var(--primary) 12%,var(--surface));border-color:var(--primary);box-shadow:0 0 0 1px var(--primary)}
+.cal-n{font-size:13.5px;font-weight:800;line-height:1}
+.cal-dots{display:flex;gap:3px;height:6px}
+.cal-dots i,.cal-ley i{width:7px;height:7px;border-radius:50%;display:inline-block;background:transparent;box-shadow:inset 0 0 0 1.5px var(--muted)}
+i.ok{background:var(--pos);box-shadow:none} i.pronto,i.hoy{background:var(--warn);box-shadow:none} i.vencido{background:var(--neg);box-shadow:none}
+.cal-amt{font-size:10.5px;font-weight:800;color:var(--muted);white-space:nowrap;overflow:hidden;max-width:100%;letter-spacing:-.02em}
+.cal-d.e-vencido .cal-amt{color:var(--neg)}
+.cal-d.e-ok .cal-amt{color:var(--pos)}
+.cal-ley{display:flex;flex-wrap:wrap;gap:6px 14px;margin:12px 2px 2px;font-size:12px;color:var(--muted);font-weight:600}
+.cal-ley span{display:inline-flex;align-items:center;gap:6px}
+@media (min-width:721px){.cal-d{height:70px}.cal-n{font-size:15px}.cal-amt{font-size:12px}}
+
 /* Donut */
 .donut-wrap{display:flex;gap:18px;align-items:center}
 .donut{position:relative;width:140px;height:140px;flex:none}
@@ -287,8 +309,14 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '1.9';
+const VERSION = '2.0';
 const CHANGELOG = [
+  {v:'2.0', fecha:'21 nov 2026', items:[
+    'Nuevo: «Calendario» en Gastos fijos. Ves el mes entero con cada vencimiento marcado en su día.',
+    'Cada día muestra puntos de colores (pagado, pendiente, vence pronto o vencido) y cuánto falta pagar ese día.',
+    'Tocá un día para ver qué vence y tildarlo ahí mismo; abajo quedan los gastos que todavía no tienen día de vencimiento.',
+    'Con el teclado, las flechas te mueven entre los días.'
+  ]},
   {v:'1.9', fecha:'20 nov 2026', items:[
     'Al tildar un pago, cobrar un ingreso o borrar algo, la pantalla cambia solo en lo necesario: no salta, no parpadea y te quedás donde estabas.',
     'La barra de «Pagado» y el anillo del resumen se mueven suavemente al tildar.',
@@ -524,7 +552,7 @@ async function storeSetMany(entries){
 }
 
 let config, current, hist;
-const ui = {tab:'resumen', filtro:'todos', openHist:null, novedad:false, respaldo:null};
+const ui = {tab:'resumen', filtro:'todos', vistaFijos:'lista', diaCal:null, openHist:null, novedad:false, respaldo:null};
 
 /* ---------- Aviso de respaldo (v1.4) ----------
    Vive en meta.respaldo = {ultimo: ms|null, base: ms, pospuesto: ms|null}. No es parte de los datos
@@ -760,7 +788,62 @@ function viewResumen(t){
     <button class="add-row" data-act="add-ingreso">+ Agregar ingreso</button>
   </div>`;
 }
+const DIAS_SEM=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+const diasDelMes=(m,y)=>new Date(y,m+1,0).getDate();
+function mesCal(){ let [m,y]=parseMes(current.mesLabel); if(m<0){ const d=new Date(); m=d.getMonth(); y=d.getFullYear(); } return [m,y]; }
+/* Estado de un vencimiento en el calendario: ok (pagado), vencido, hoy, pronto (≤3 días), pend. Solo el mes en curso usa la fecha de hoy. */
+function estadoVence(x, dia, m, y){
+  if(current.gastos[x.id]?.pagado) return 'ok';
+  const now=new Date();
+  if(m===now.getMonth() && y===now.getFullYear()){ const diff=dia-now.getDate();
+    if(diff<0) return 'vencido'; if(diff===0) return 'hoy'; if(diff<=3) return 'pronto'; }
+  return 'pend';
+}
+const ESTADO_TXT={ok:'pagado', vencido:'vencido', hoy:'vence hoy', pronto:'vence pronto', pend:'pendiente'};
+function vencimientosDelMes(){
+  const [m,y]=mesCal(), n=diasDelMes(m,y), porDia={}, sinDia=[];
+  config.gastos.forEach(x=>{ const v=Math.round(Number(x.vence));
+    if(!v || v<1){ sinDia.push(x); return; } (porDia[Math.min(v,n)] ||= []).push(x); });
+  return {m,y,n,porDia,sinDia};
+}
+function viewCalendario(t){
+  const {m,y,n,porDia,sinDia}=vencimientosDelMes(), now=new Date(), esMesHoy=(m===now.getMonth()&&y===now.getFullYear());
+  const orden=['vencido','hoy','pronto','pend','ok'];
+  let sel=ui.diaCal;
+  if(!(sel>=1 && sel<=n)) sel = esMesHoy? now.getDate() : (Number(Object.keys(porDia)[0])||1);
+  const offset=(new Date(y,m,1).getDay()+6)%7;
+  let celdas='';
+  for(let i=0;i<offset;i++) celdas+=`<span aria-hidden="true"></span>`;
+  for(let d=1; d<=n; d++){
+    const items=porDia[d]||[], ests=items.map(x=>estadoVence(x,d,m,y));
+    const est=items.length? orden.find(o=>ests.includes(o)) : '';
+    const falta=items.reduce((a,x)=>a+(current.gastos[x.id]?.pagado?0:eff(current.gastos[x.id]?.real,x.estimado)),0);
+    const hoy=esMesHoy && d===now.getDate(), dow=DIAS_SEM[new Date(y,m,d).getDay()];
+    const lbl=`${dow} ${d}${hoy?', hoy':''}: `+(items.length? `${items.length} vencimiento${items.length>1?'s':''}, ${items.map((x,k)=>`${x.nombre} ${ESTADO_TXT[ests[k]]}`).join(', ')}${falta?`; falta pagar ${money(falta)}`:''}` : 'sin vencimientos');
+    celdas+=`<button class="cal-d${items.length?' con e-'+est:''}${hoy?' hoy':''}${d===sel?' sel':''}" data-act="cal-dia" data-i="${d}" aria-pressed="${d===sel}" aria-label="${esc(lbl)}">
+      <span class="cal-n" aria-hidden="true">${d}</span>${items.length?`<span class="cal-dots" aria-hidden="true">${ests.slice(0,3).map(e=>`<i class="${e}"></i>`).join('')}</span><span class="cal-amt" aria-hidden="true">${falta?compact(falta):'✓'}</span>`:''}</button>`;
+  }
+  const delDia=porDia[sel]||[], totDia=delDia.reduce((a,x)=>a+eff(current.gastos[x.id]?.real,x.estimado),0);
+  const nVenc=Object.values(porDia).reduce((a,l)=>a+l.length,0);
+  const pendMes=Object.values(porDia).flat().filter(x=>!current.gastos[x.id]?.pagado).length;
+  return `<div class="card">
+    <div class="card-h"><div><h2>Calendario de ${esc(MESES[m])}</h2><div class="sub">${nVenc} vencimiento${nVenc===1?'':'s'} · ${pendMes? `${pendMes} sin pagar` : (nVenc?'todo pagado':'cargá el día en cada gasto')}</div></div></div>
+    <div class="cal-sem" aria-hidden="true">${['L','M','M','J','V','S','D'].map(x=>`<span>${x}</span>`).join('')}</div>
+    <div class="cal" role="group" aria-label="Días de ${esc(MESES[m])} ${y}">${celdas}</div>
+    <div class="cal-ley" aria-hidden="true"><span><i class="pend"></i>Pendiente</span><span><i class="pronto"></i>Vence pronto</span><span><i class="vencido"></i>Vencido</span><span><i class="ok"></i>Pagado</span></div>
+    <div class="day-h" id="cal-dia-h" aria-live="polite"><span>${DIAS_SEM[new Date(y,m,sel).getDay()]} ${sel} de ${MESES[m].toLowerCase()}</span><span>${delDia.length?money(totDia):''}</span></div>
+    ${delDia.length? delDia.map(gastoRow).join('') : `<div class="empty" style="padding:14px 10px">Nada vence este día.</div>`}
+    ${sinDia.length? `<div class="day-h"><span>Sin día de vencimiento</span><span>${sinDia.length}</span></div>
+      <div class="amt-sub" style="padding:0 4px 4px">Tocá un gasto y completá «Vence el día» para verlo en el calendario.</div>${sinDia.map(gastoRow).join('')}` : ''}
+  </div>`;
+}
 function viewFijos(t){
+  const v=(k,l)=>`<button class="${ui.vistaFijos===k?'on':''}" data-act="vista" data-f="${k}" aria-pressed="${ui.vistaFijos===k}">${l}</button>`;
+  const barra=`<div class="vista-bar"><div class="seg" role="group" aria-label="Ver gastos fijos como">${v('lista','Lista')}${v('cal','Calendario')}</div></div>`;
+  if(ui.vistaFijos==='cal') return barra + viewCalendario(t);
+  return barra + viewFijosLista(t);
+}
+function viewFijosLista(t){
   let items=config.gastos;
   if(ui.filtro==='pend') items=items.filter(x=>!current.gastos[x.id].pagado);
   if(ui.filtro==='pag') items=items.filter(x=>current.gastos[x.id].pagado);
@@ -911,6 +994,12 @@ function asociarLabels(root){
 const FOCUSABLES='a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 /* Enter o Espacio activan filas y meses (role=button); Ctrl/Cmd+Z = «Deshacer» mientras se ve el aviso. */
 document.addEventListener('keydown', e=>{
+  const cd=e.target.closest?.('.cal-d');
+  if(cd && !sheetActual && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){
+    const paso={ArrowLeft:-1,ArrowRight:1,ArrowUp:-7,ArrowDown:7}[e.key], n=document.querySelectorAll('.cal-d').length;
+    const d=Math.min(n,Math.max(1,Number(cd.dataset.i)+paso));
+    e.preventDefault(); ui.diaCal=d; render(); document.querySelector(`.cal-d[data-i="${d}"]`)?.focus(); return;
+  }
   if(sheetActual){
     if(e.key==='Escape'){ e.preventDefault(); sheetActual.close(); return; }
     if(e.key==='Tab'){
@@ -1232,6 +1321,8 @@ document.addEventListener('click', async e=>{
   switch(el.dataset.act){
     case 'tab': ui.tab=el.dataset.tab; render(); window.scrollTo({top:0,behavior:'smooth'}); break;
     case 'filtro': ui.filtro=el.dataset.f; render(); break;
+    case 'vista': ui.vistaFijos=el.dataset.f; render(); break;
+    case 'cal-dia': ui.diaCal=Number(el.dataset.i); render(); break;
     case 'toggle-gasto': current.gastos[id].pagado=!current.gastos[id].pagado; await saveAll(); render(); break;
     case 'toggle-ingreso': current.ingresos[id].cobrado=!current.ingresos[id].cobrado; await saveAll(); render(); break;
     case 'edit-gasto': sheetGasto(id); break;
