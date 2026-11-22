@@ -33,6 +33,10 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     la fecha de hoy; día 31 en un mes de 30 cae el último día; tocar un día muestra sus gastos y se pueden tildar
     ahí (mismo nodo, guardado); «Sin día de vencimiento» lista los que no tienen día; flechas del teclado;
     nombres para lectores de pantalla; contraste AA; datos sin cambios; 390/1280 claro/oscuro
+  - (v2.1) aviso de vencimientos en Resumen (fecha fija con el reloj de Playwright): vencido, hoy y próximos 3
+    días, sin pagados ni lejanos ni sin día; título y total; orden; «Pagado» desde el aviso guarda y se deshace;
+    «Ver en el calendario» abre el día de hoy; no aparece en otro mes; día 31 en mes de 30 vence el 30 (también
+    la etiqueta de la fila); contraste AA; 390/1280 claro/oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -59,8 +63,9 @@ V10 = {
     'history': [{'mesLabel': 'Septiembre 2026', 'ingresos': 900000, 'gastos': 700000, 'ahorro': 200000, 'guardado': '2026-10-01'}],
 }
 
-def new_page(b, w, h, theme=None, seed=None):
+def new_page(b, w, h, theme=None, seed=None, fecha=None):
     ctx = b.new_context(viewport={'width': w, 'height': h}, device_scale_factor=1)
+    if fecha: ctx.clock.set_fixed_time(fecha)  # 'AAAA-MM-DDTHH:MM:SS' (hora local)
     # Google Fonts es el único recurso externo permitido (con respaldo del sistema): sin red, se responde vacío.
     ctx.route(lambda u: not u.startswith('file:'), lambda r: r.fulfill(status=200, body='', content_type='text/css'))
     page = ctx.new_page()
@@ -773,6 +778,75 @@ def calendario(b):
         check(not errs, f'{label}: sin errores {errs}')
         ctx.close()
 
+def aviso_vence(b):
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    def datos(mes, gs, pagados=()):
+        est = {x['id']: {'real': '', 'pagado': x['id'] in pagados} for x in gs}
+        return {'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 900000, 'nota': ''}], 'gastos': gs},
+                'current': {'mesLabel': mes, 'gastos': est, 'ingresos': {'i1': {'real': '', 'cobrado': False}}, 'movimientos': []}, 'history': []}
+    g = lambda i, n, m, v: {'id': i, 'nombre': n, 'estimado': m, 'categoria': 'servicios', 'vence': v, 'nota': ''}
+    gs = [g('gx', 'Lejano de prueba', 10000, 25), g('gc', 'Cuota de prueba', 30000, 17), g('gb', 'Luz de prueba', 20000, 15),
+          g('ga', 'Atrasado de prueba', 11000, 10), g('gd', 'Pagado de prueba', 50000, 16), g('gf', 'Sin día de prueba', 9000, '')]
+    seed = datos('Noviembre 2026', gs, pagados=('gd',))
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark'), (390, 844, 'dark'), (1280, 900, 'light')]:
+        label = f'aviso vence {w} {theme}'
+        print(f'\n== Aviso de vencimientos (v2.1) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=seed, fecha='2026-11-15T10:00:00')
+        antes = get(page, 'config')
+        av = page.locator('#aviso-vence')
+        check(av.count() == 1, f'{label}: aparece el aviso en Resumen')
+        check(page.evaluate("document.querySelector('#aviso-vence').previousElementSibling.matches('.nav')"), f'{label}: está arriba de todo (debajo de las pestañas)')
+        check(av.locator('b').first.inner_text() == 'Atrasado de prueba está vencido', f'{label}: título por lo vencido')
+        txt = av.inner_text().replace('\xa0', ' ')
+        check('1 vence hoy y 1 vence en los próximos días' in txt and '$ 61.000' in txt, f'{label}: resumen y total ({txt[:120]!r})')
+        orden = page.evaluate("[...document.querySelectorAll('#aviso-vence .va-row')].map(e=>e.dataset.key)")
+        check(orden == ['va-ga', 'va-gb', 'va-gc'], f'{label}: vencido, hoy y en 2 días, sin pagados, lejanos ni sin día ({orden})')
+        tags = page.evaluate("[...document.querySelectorAll('#aviso-vence .va-row .tag')].map(e=>e.textContent)")
+        check(tags == ['Vencido · día 10', 'Vence hoy', 'Vence en 2 días'], f'{label}: etiquetas ({tags})')
+        check('danger' in av.get_attribute('class'), f'{label}: con algo vencido el aviso es rojo')
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA con el aviso {[(o["t"], o["r"]) for o in malos]}')
+        no_hscroll(page, w, label)
+        page.screenshot(path=str(SHOTS / f'aviso-vence-{w}-{theme}.png'))
+        # Pagar desde el aviso y deshacer
+        page.click('[data-act=aviso-pagar][data-id=ga]'); page.wait_for_timeout(200)
+        check(get(page, 'current')['gastos']['ga']['pagado'] is True, f'{label}: «Pagado» desde el aviso guarda')
+        check(page.locator('[data-key=va-ga]').count() == 0 and av.locator('b').first.inner_text() == 'Hoy vence Luz de prueba', f'{label}: sale del aviso y cambia el título')
+        check('danger' not in av.get_attribute('class'), f'{label}: sin vencidos el aviso es ámbar')
+        check(page.get_attribute('[data-act=toggle-gasto][data-id=ga]', 'aria-pressed') == 'true', f'{label}: la fila del checklist también queda tildada')
+        page.click('#toast-undo'); page.wait_for_timeout(200)
+        check(get(page, 'current')['gastos']['ga']['pagado'] is False and page.locator('[data-key=va-ga]').count() == 1, f'{label}: «Deshacer» lo devuelve')
+        # Ver en el calendario
+        page.click('#aviso-vence [data-act=ver-cal]'); page.wait_for_timeout(200)
+        check(page.locator('.nav [data-tab=fijos]').get_attribute('aria-current') == 'page' and page.locator('.cal').count() == 1, f'{label}: «Ver en el calendario» abre el calendario')
+        check(page.get_attribute('.cal-d[data-i="15"]', 'aria-pressed') == 'true', f'{label}: con el día de hoy elegido')
+        check(get(page, 'config') == antes, f'{label}: la configuración no cambia')
+        check(not errs, f'{label}: sin errores {errs}')
+        ctx.close()
+    print('\n== Aviso de vencimientos: otros casos')
+    # Otro mes: sin aviso
+    ctx, page, errs = new_page(b, 390, 844, seed=datos('Octubre 2026', gs), fecha='2026-11-15T10:00:00')
+    check(page.locator('#aviso-vence').count() == 0, 'mes que no es el actual: sin aviso')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    # Solo próximos, uno solo
+    ctx, page, errs = new_page(b, 390, 844, seed=datos('Noviembre 2026', [g('gc', 'Cuota de prueba', 30000, 17), g('gx', 'Lejano de prueba', 10000, 25)]), fecha='2026-11-15T10:00:00')
+    check(page.inner_text('#aviso-vence b') == 'Cuota de prueba: vence en 2 días', 'uno solo en 2 días: título «vence en 2 días»')
+    page.click('[data-act=aviso-pagar][data-id=gc]'); page.wait_for_timeout(200)
+    check(page.locator('#aviso-vence').count() == 0, 'pagado lo único: el aviso desaparece')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    # Mañana
+    ctx, page, errs = new_page(b, 390, 844, seed=datos('Noviembre 2026', [g('gc', 'Cuota de prueba', 30000, 16)]), fecha='2026-11-15T10:00:00')
+    check(page.inner_text('#aviso-vence b') == 'Cuota de prueba: vence mañana', 'vence mañana')
+    ctx.close()
+    # Día 31 en un mes de 30: vence hoy el 30
+    ctx, page, errs = new_page(b, 1280, 900, seed=datos('Noviembre 2026', [g('gc', 'Cuota de prueba', 30000, 31), g('gy', 'Agua de prueba', 30000, 30)]), fecha='2026-11-30T10:00:00')
+    check(page.inner_text('#aviso-vence b') == 'Hoy vencen 2 gastos', 'día 31 en un mes de 30 vence hoy (30)')
+    check(page.locator('[data-key=g-gc] .tag', has_text='Vence hoy').count() == 1, 'la etiqueta de la fila también dice «Vence hoy»')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    # Todo pagado o sin gastos: sin aviso
+    ctx, page, errs = new_page(b, 390, 844, seed=datos('Noviembre 2026', [g('gc', 'Cuota de prueba', 30000, 10)], pagados=('gc',)), fecha='2026-11-15T10:00:00')
+    check(page.locator('#aviso-vence').count() == 0, 'todo pagado: sin aviso'); ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -799,6 +873,7 @@ with sync_playwright() as pw:
     accesibilidad(b)
     redibujo(b)
     calendario(b)
+    aviso_vence(b)
     primera_vez(b)
     b.close()
 

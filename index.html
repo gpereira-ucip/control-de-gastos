@@ -251,6 +251,19 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 .inp.avisada{border-color:var(--warn)}
 .sheet-note{color:var(--muted);font-size:13.5px;margin:0 0 12px}
 .nudge-txt b{display:block;font-size:15px;margin-bottom:2px}
+.venc-aviso.danger{border-left-color:var(--neg)}
+.venc-aviso.danger .ic{background:color-mix(in srgb,var(--neg) 14%,transparent);color:var(--neg)}
+.venc-aviso + .nudge{margin-top:12px}
+.venc-aviso p strong{color:var(--text)}
+.va-list{margin-top:10px;display:flex;flex-direction:column}
+.va-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--border)}
+.va-main{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.va-nom{font-weight:700;font-size:14px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.va-amt{font-weight:800;font-size:14px;flex:none}
+.va-pay{flex:none;display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);border-radius:99px;padding:6px 11px;font-size:12.5px;font-weight:700;min-height:34px}
+.va-pay svg{width:15px;height:15px;stroke:var(--pos);fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.va-pay:hover{border-color:var(--pos)}
+@media (max-width:520px){.va-pay span{display:none}.va-pay{padding:0;width:36px;height:36px;justify-content:center}}
 .nudge-txt p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.45}
 .nudge-act{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .nudge-act .btn{padding:9px 14px;font-size:13.5px}
@@ -309,8 +322,14 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '2.0';
+const VERSION = '2.1';
 const CHANGELOG = [
+  {v:'2.1', fecha:'22 nov 2026', items:[
+    'Nuevo: aviso de vencimientos arriba del Resumen. Te dice qué vence hoy, qué vence en los próximos 3 días y qué quedó vencido, con el total a pagar.',
+    'Desde el aviso podés marcar cada gasto como pagado con un toque (y deshacerlo si te equivocaste).',
+    '«Ver en el calendario» te lleva directo al día de hoy en el calendario de Gastos fijos.',
+    'Si un gasto vence el 31 y el mes tiene 30 días, ahora se considera el último día del mes en todos lados.'
+  ]},
   {v:'2.0', fecha:'21 nov 2026', items:[
     'Nuevo: «Calendario» en Gastos fijos. Ves el mes entero con cada vencimiento marcado en su día.',
     'Cada día muestra puntos de colores (pagado, pendiente, vence pronto o vencido) y cuánto falta pagar ese día.',
@@ -673,9 +692,9 @@ function parseMes(label){
 }
 function venceTag(x, st){
   if(!x.vence) return '';
-  const d=Number(x.vence);
-  if(st.pagado) return `<span class="tag">Día ${d}</span>`;
   const [m,y]=parseMes(current.mesLabel), now=new Date();
+  let d=Number(x.vence); if(m>=0) d=Math.min(d, new Date(y,m+1,0).getDate());
+  if(st.pagado) return `<span class="tag">Día ${d}</span>`;
   if(m===now.getMonth() && y===now.getFullYear()){
     const diff=d-now.getDate();
     if(diff<0) return `<span class="tag danger">Vencido · día ${d}</span>`;
@@ -700,6 +719,7 @@ const IC = {
   moon:'<path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/>',
   lock:'<path d="M6 11h12v9H6zM8 11V8a4 4 0 018 0v3"/>',
   reset:'<path d="M4 4v6h6M20 12a8 8 0 01-14.9 4M4 12a8 8 0 0114.9-4"/>',
+  bell:'<path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15zM10 20.5a2 2 0 004 0"/>',
   spark:'<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/>'
 };
 const svg = (k, cls='') => `<svg viewBox="0 0 24 24" class="${cls}" aria-hidden="true" focusable="false">${IC[k]}</svg>`;
@@ -774,10 +794,51 @@ function donut(t){
     <div class="legend">${entries.slice(0,7).map(([k,v])=>`<div class="lg"><i style="background:${cat(k).color}"></i><span>${cat(k).label}</span><b>${compact(v)}</b><em>${Math.round(v/t.gastos*100)}%</em></div>`).join('')}</div>
   </div>`;
 }
+/* Aviso de vencimientos en Resumen (v2.1): solo el mes en curso; gastos sin pagar vencidos, de hoy o de los
+   próximos VENCE_PRONTO_DIAS días (el día se topa al último del mes, como en el calendario). */
+const VENCE_PRONTO_DIAS = 3;
+function vencimientosAviso(){
+  const [m,y]=parseMes(current.mesLabel), now=new Date();
+  if(m!==now.getMonth() || y!==now.getFullYear()) return [];
+  const n=diasDelMes(m,y), hoy=now.getDate(), out=[];
+  config.gastos.forEach(x=>{ const v=Math.round(Number(x.vence)); if(!v || v<1) return;
+    const s=current.gastos[x.id]; if(!s || s.pagado) return;
+    const dia=Math.min(v,n), diff=dia-hoy;
+    if(diff<=VENCE_PRONTO_DIAS) out.push({x, dia, diff, monto:eff(s.real,x.estimado)}); });
+  return out.sort((a,b)=>a.diff-b.diff || b.monto-a.monto);
+}
+function venceTxt(o){
+  if(o.diff<0) return `Vencido · día ${o.dia}`;
+  if(o.diff===0) return 'Vence hoy';
+  return o.diff===1 ? 'Vence mañana' : `Vence en ${o.diff} días`;
+}
+function vencAviso(){
+  const l=vencimientosAviso(); if(!l.length) return '';
+  const venc=l.filter(o=>o.diff<0), hoy=l.filter(o=>o.diff===0), pronto=l.filter(o=>o.diff>0);
+  const pl=(k,a,b)=>k===1?a:b, total=l.reduce((a,o)=>a+o.monto,0);
+  let titulo;
+  if(venc.length) titulo = venc.length===1 ? `${venc[0].x.nombre} está vencido` : `Tenés ${venc.length} gastos vencidos`;
+  else if(hoy.length) titulo = hoy.length===1 ? `Hoy vence ${hoy[0].x.nombre}` : `Hoy vencen ${hoy.length} gastos`;
+  else titulo = pronto.length===1 ? `${pronto[0].x.nombre}: ${venceTxt(pronto[0]).toLowerCase()}` : `${pronto.length} gastos vencen en los próximos días`;
+  const extra=[]; if(venc.length && hoy.length) extra.push(`${hoy.length} ${pl(hoy.length,'vence','vencen')} hoy`);
+  if((venc.length||hoy.length) && pronto.length) extra.push(`${pronto.length} ${pl(pronto.length,'vence','vencen')} en los próximos días`);
+  const nivel = venc.length?'danger':'warn';
+  return `<div class="card nudge venc-aviso ${nivel}" id="aviso-vence" role="status">
+    <span class="ic">${svg('bell')}</span>
+    <div class="nudge-txt"><b>${esc(titulo)}</b>
+      <p>${extra.length? esc(extra.join(' y ')[0].toUpperCase()+extra.join(' y ').slice(1))+'. ' : ''}Total a pagar: <strong>${money(total)}</strong></p>
+      <div class="va-list">${l.map(o=>`<div class="va-row" data-key="va-${o.x.id}">
+        <div class="va-main"><span class="va-nom">${esc(o.x.nombre)}</span><span class="tag ${o.diff<0?'danger':'warn'}">${venceTxt(o)}</span></div>
+        <span class="va-amt">${money(o.monto)}</span>
+        <button type="button" class="va-pay" data-act="aviso-pagar" data-id="${o.x.id}" aria-label="Marcar ${esc(o.x.nombre)} como pagado">${svg('check')}<span>Pagado</span></button>
+      </div>`).join('')}</div>
+      <button type="button" class="nudge-alt" data-act="ver-cal">Ver en el calendario</button>
+    </div></div>`;
+}
 function viewResumen(t){
   /* Checklist del mes (pedido de Gonzalo, 14/11/2026): se ven todos los gastos fijos y lo tildado queda tildado en su lugar. */
   const lista = [...config.gastos].sort((a,b)=>(Number(a.vence)||99)-(Number(b.vence)||99));
-  return `${respaldoAviso()}<div class="grid">
+  return `${vencAviso()}${respaldoAviso()}<div class="grid">
     <div class="card"><div class="card-h"><h2>¿En qué se va la plata?</h2><span class="sub">${esc(current.mesLabel)}</span></div>${donut(t)}</div>
     <div class="card"><div class="card-h"><h2>Gastos del mes</h2><span class="sub">${t.nPag} de ${t.nFijos} pagados</span></div>
       ${lista.length? lista.map(gastoRow).join('') : `<div class="empty"><b>Sin gastos fijos</b>Agregalos desde «Gastos fijos».</div>`}
@@ -1323,6 +1384,11 @@ document.addEventListener('click', async e=>{
     case 'filtro': ui.filtro=el.dataset.f; render(); break;
     case 'vista': ui.vistaFijos=el.dataset.f; render(); break;
     case 'cal-dia': ui.diaCal=Number(el.dataset.i); render(); break;
+    case 'ver-cal': ui.tab='fijos'; ui.vistaFijos='cal'; ui.diaCal=null; render(); window.scrollTo({top:0,behavior:'smooth'}); break;
+    case 'aviso-pagar': { const st=current.gastos[id], cur=current, x=config.gastos.find(g=>g.id===id); if(!st||!x) break;
+      st.pagado=true; await saveAll(); render();
+      toast(`${x.nombre}: pagado`, async ()=>{ if(current!==cur){ toast('El mes cambió: no se pudo deshacer'); return; } st.pagado=false; await saveAll(); render(); });
+      break; }
     case 'toggle-gasto': current.gastos[id].pagado=!current.gastos[id].pagado; await saveAll(); render(); break;
     case 'toggle-ingreso': current.ingresos[id].cobrado=!current.ingresos[id].cobrado; await saveAll(); render(); break;
     case 'edit-gasto': sheetGasto(id); break;
