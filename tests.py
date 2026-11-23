@@ -37,6 +37,11 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     días, sin pagados ni lejanos ni sin día; título y total; orden; «Pagado» desde el aviso guarda y se deshace;
     «Ver en el calendario» abre el día de hoy; no aparece en otro mes; día 31 en mes de 30 vence el 30 (también
     la etiqueta de la fila); contraste AA; 390/1280 claro/oscuro
+  - (v2.2) exportar vencimientos a .ics (fecha fija): botón en el calendario y en el menú; hoja con aviso y
+    «Qué gastos»; vista previa que cambia; descarga con un VEVENT por gasto sin pagar (todo el día, UID estable,
+    31→30, DTEND al día siguiente), VALARM según el aviso elegido (y ninguno en «Sin aviso» o pagados), CRLF,
+    líneas de ≤75 octetos, texto escapado; «Todos» suma los pagados; la elección queda en meta.ics y se
+    recuerda al recargar; sin días → mensaje sin descarga; datos sin cambios; contraste AA; 390/1280 claro/oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -847,6 +852,86 @@ def aviso_vence(b):
     ctx, page, errs = new_page(b, 390, 844, seed=datos('Noviembre 2026', [g('gc', 'Cuota de prueba', 30000, 10)], pagados=('gc',)), fecha='2026-11-15T10:00:00')
     check(page.locator('#aviso-vence').count() == 0, 'todo pagado: sin aviso'); ctx.close()
 
+def ics(b):
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    g = lambda i, n, m, v, c='servicios', nota='': {'id': i, 'nombre': n, 'estimado': m, 'categoria': c, 'vence': v, 'nota': nota}
+    gs = [g('ga', 'Luz de prueba', 20000, 15), g('gb', 'Colegio, cuota; prueba', 90000, 31, 'educacion', 'Nota larga de prueba con acentos: año, cañería, música y más texto para pasar los 75 octetos de una línea'),
+          g('gc', 'Pagado de prueba', 50000, 5), g('gd', 'Sin día de prueba', 9000, '')]
+    est = {x['id']: {'real': '', 'pagado': x['id'] == 'gc'} for x in gs}; est['ga']['real'] = 23500
+    seed = {'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 900000, 'nota': ''}], 'gastos': gs},
+            'current': {'mesLabel': 'Noviembre 2026', 'gastos': est, 'ingresos': {'i1': {'real': '', 'cobrado': False}}, 'movimientos': []}, 'history': []}
+    def bajar(page):
+        with page.expect_download() as dl:
+            page.click('.sheet .actions button[type=submit]')
+        d = dl.value; raw = open(d.path(), 'rb').read()
+        return d.suggested_filename, raw
+    def eventos(txt):
+        un = txt.replace('\r\n ', '')
+        return [e.split('END:VEVENT')[0] for e in un.split('BEGIN:VEVENT')[1:]]
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark')]:
+        label = f'ics {w} {theme}'
+        print(f'\n== Agregar al calendario (v2.2) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=seed, fecha='2026-11-10T10:00:00')
+        antes = (get(page, 'config'), get(page, 'current'))
+        page.click('.nav [data-tab=fijos]'); page.click('[data-act=vista][data-f=cal]'); page.wait_for_timeout(150)
+        check(page.locator('#app [data-act=ics]').count() == 1, f'{label}: botón «Agregar al calendario» en el calendario')
+        no_hscroll(page, w, label + ' calendario')
+        page.screenshot(path=str(SHOTS / f'ics-cal-{w}-{theme}.png'))
+        page.click('#app [data-act=ics]'); page.wait_for_selector('.sheet'); page.wait_for_timeout(450)
+        check(page.inner_text('#sheet-title') == 'Agregar al calendario', f'{label}: se abre la hoja')
+        check('Noviembre 2026' in page.inner_text('.sheet .sheet-note') and 'undefined' not in page.inner_text('.sheet'), f'{label}: la hoja nombra el mes')
+        check(page.input_value('.sheet [name=alarma]') == '1d' and page.input_value('.sheet [name=todos]') == '0', f'{label}: por defecto 1 día antes y solo sin pagar')
+        check(page.locator('.ics-row').count() == 2 and 'Falta pagar $' in page.inner_text('.ics-h'), f'{label}: vista previa con 2 sin pagar')
+        page.screenshot(path=str(SHOTS / f'ics-hoja-{w}-{theme}.png'))
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en la hoja {[(o["t"], o["r"]) for o in malos]}')
+        page.select_option('.sheet [name=todos]', '1'); page.wait_for_timeout(80)
+        check(page.locator('.ics-row').count() == 3 and page.locator('.ics-row.pagado').count() == 1, f'{label}: «Todos» suma el pagado en la vista previa')
+        page.select_option('.sheet [name=todos]', '0'); page.wait_for_timeout(80)
+        nombre, raw = bajar(page)
+        txt = raw.decode('utf-8')
+        check(nombre == 'vencimientos-2026-11.ics', f'{label}: nombre del archivo ({nombre})')
+        check(txt.startswith('BEGIN:VCALENDAR\r\n') and txt.endswith('END:VCALENDAR\r\n') and '\n' not in txt.replace('\r\n', ''), f'{label}: formato con CRLF')
+        check(max(len(l.encode()) for l in txt.split('\r\n')) <= 75, f'{label}: ninguna línea pasa los 75 octetos')
+        ev = eventos(txt)
+        check(len(ev) == 2, f'{label}: 2 eventos (sin el pagado ni el que no tiene día)')
+        luz = next((e for e in ev if 'Luz de prueba' in e), ''); col = next((e for e in ev if 'Colegio' in e), '')
+        check('DTSTART;VALUE=DATE:20261115' in luz and 'DTEND;VALUE=DATE:20261116' in luz, f'{label}: Luz el 15, todo el día')
+        check('DTSTART;VALUE=DATE:20261130' in col and 'DTEND;VALUE=DATE:20261201' in col, f'{label}: el 31 cae el 30 de noviembre')
+        check('UID:cm-ga-202611@control-mensual' in luz, f'{label}: UID estable por gasto y mes')
+        check('23.500' in luz and 'TRIGGER:-PT15H' in luz and luz.count('BEGIN:VALARM') == 1, f'{label}: monto real y aviso 1 día antes a las 9')
+        check(r'Colegio\, cuota\; prueba' in col and 'Nota: Nota larga' in col and '(estimado)' in col, f'{label}: texto escapado, nota y «estimado»')
+        check(get(page, 'meta').get('ics') == {'alarma': '1d', 'todos': False}, f'{label}: preferencia guardada')
+        page.wait_for_timeout(100)
+        check('Descargado: 2 vencimientos' in page.inner_text('#toast'), f'{label}: aviso de descarga')
+        # Desde el menú: sin aviso + todos
+        page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet')
+        page.click('.sheet [data-run=ics]'); page.wait_for_selector('.sheet [name=alarma]')
+        page.select_option('.sheet [name=alarma]', 'no'); page.select_option('.sheet [name=todos]', '1')
+        _, raw2 = bajar(page); ev2 = eventos(raw2.decode('utf-8'))
+        check(len(ev2) == 3 and not any('VALARM' in e for e in ev2) and any('✓ Vence Pagado de prueba' in e for e in ev2), f'{label}: «Sin aviso» y «Todos» (pagado con ✓)')
+        page.reload(); page.wait_for_selector('.hero')
+        page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet'); page.click('.sheet [data-run=ics]'); page.wait_for_selector('.sheet [name=alarma]')
+        check(page.input_value('.sheet [name=alarma]') == 'no' and page.input_value('.sheet [name=todos]') == '1', f'{label}: recuerda la elección al recargar')
+        page.select_option('.sheet [name=alarma]', '7d'); page.select_option('.sheet [name=todos]', '0')
+        _, raw3 = bajar(page); ev3 = eventos(raw3.decode('utf-8'))
+        check(len(ev3) == 2 and all('TRIGGER:-P6DT15H' in e for e in ev3), f'{label}: aviso 1 semana antes')
+        check((get(page, 'config'), get(page, 'current')) == antes, f'{label}: los datos no cambian')
+        no_hscroll(page, w, label)
+        check(not errs, f'{label}: sin errores {errs}')
+        ctx.close()
+    print('\n== Agregar al calendario: todo pagado')
+    s2 = json.loads(json.dumps(seed)); 
+    for k in s2['current']['gastos']: s2['current']['gastos'][k]['pagado'] = True
+    ctx, page, errs = new_page(b, 390, 844, seed=s2, fecha='2026-11-10T10:00:00')
+    page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet'); page.click('.sheet [data-run=ics]'); page.wait_for_selector('.sheet [name=alarma]')
+    check('No queda nada por pagar' in page.inner_text('.ics-prev'), 'todo pagado: mensaje en la vista previa')
+    descargas = []; page.on('download', lambda d: descargas.append(d))
+    page.click('.sheet .actions button[type=submit]'); page.wait_for_timeout(300)
+    check(not descargas and page.locator('.sheet').count() == 1, 'todo pagado: no descarga y la hoja sigue abierta')
+    check(not errs, f'sin errores {errs}')
+    ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -874,6 +959,7 @@ with sync_playwright() as pw:
     redibujo(b)
     calendario(b)
     aviso_vence(b)
+    ics(b)
     primera_vez(b)
     b.close()
 

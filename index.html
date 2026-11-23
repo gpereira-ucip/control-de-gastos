@@ -156,6 +156,17 @@ button{cursor:pointer}
 
 /* Calendario del mes (v2.0) */
 .vista-bar{display:flex;justify-content:flex-end;margin:0 0 12px}
+/* Exportar a calendario (v2.2) */
+.btn-ics{display:inline-flex;align-items:center;gap:6px;padding:8px 11px;font-size:12.5px;flex:none}
+.btn-ics svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+@media (max-width:420px){.btn-ics span{display:none}.btn-ics{padding:9px}}
+.ics-prev{margin-top:14px;border:1px solid var(--border);border-radius:12px;padding:4px 12px}
+.ics-prev .ics-h{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;font-weight:800;color:var(--muted);padding:8px 0 6px}
+.ics-row{display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--border);font-size:13.5px}
+.ics-row .d{flex:none;width:44px;font-weight:800;color:var(--muted);font-size:12.5px}
+.ics-row .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.ics-row .a{flex:none;font-weight:700;font-variant-numeric:tabular-nums}
+.ics-row.pagado .n{color:var(--muted)}
 .cal-sem,.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
 .cal-sem{margin-bottom:4px}
 .cal-sem span{text-align:center;font-size:11px;font-weight:800;color:var(--muted);letter-spacing:.04em}
@@ -322,8 +333,14 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '2.1';
+const VERSION = '2.2';
 const CHANGELOG = [
+  {v:'2.2', fecha:'23 nov 2026', items:[
+    'Nuevo: «Agregar al calendario». Descargás los vencimientos del mes en un archivo .ics y los sumás al calendario del celular o de la compu.',
+    'Elegís cuándo querés el aviso: el mismo día, 1, 2 o 3 días antes, una semana antes o sin aviso. La app recuerda tu elección.',
+    'Por defecto van solo los que te faltan pagar; si querés, también los que ya pagaste.',
+    'Lo encontrás arriba del calendario de Gastos fijos y en el menú de Opciones.'
+  ]},
   {v:'2.1', fecha:'22 nov 2026', items:[
     'Nuevo: aviso de vencimientos arriba del Resumen. Te dice qué vence hoy, qué vence en los próximos 3 días y qué quedó vencido, con el total a pagar.',
     'Desde el aviso podés marcar cada gasto como pagado con un toque (y deshacerlo si te equivocaste).',
@@ -571,7 +588,7 @@ async function storeSetMany(entries){
 }
 
 let config, current, hist;
-const ui = {tab:'resumen', filtro:'todos', vistaFijos:'lista', diaCal:null, openHist:null, novedad:false, respaldo:null};
+const ui = {tab:'resumen', filtro:'todos', vistaFijos:'lista', diaCal:null, openHist:null, novedad:false, respaldo:null, ics:{alarma:'1d', todos:false}};
 
 /* ---------- Aviso de respaldo (v1.4) ----------
    Vive en meta.respaldo = {ultimo: ms|null, base: ms, pospuesto: ms|null}. No es parte de los datos
@@ -660,6 +677,7 @@ async function load(){
   ui.novedad = hadData && meta.appVersion !== VERSION && !meta.vistoNovedades?.includes(VERSION);
   const rsp = (meta.respaldo && typeof meta.respaldo==='object') ? meta.respaldo : {ultimo:null, base: hadData?0:Date.now(), pospuesto:null};
   ui.respaldo = rsp;
+  if(meta.ics && typeof meta.ics==='object'){ if(ICS_ALARMAS[meta.ics.alarma]) ui.ics.alarma=meta.ics.alarma; ui.ics.todos=!!meta.ics.todos; }
   await storeSet('meta', JSON.stringify({...meta, schemaVersion:SCHEMA_VERSION, appVersion:VERSION, respaldo:rsp}));
 }
 async function marcarNovedadesVistas(){
@@ -720,6 +738,7 @@ const IC = {
   lock:'<path d="M6 11h12v9H6zM8 11V8a4 4 0 018 0v3"/>',
   reset:'<path d="M4 4v6h6M20 12a8 8 0 01-14.9 4M4 12a8 8 0 0114.9-4"/>',
   bell:'<path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15zM10 20.5a2 2 0 004 0"/>',
+  cal:'<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4M12 13v5M9.5 15.5h5"/>',
   spark:'<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/>'
 };
 const svg = (k, cls='') => `<svg viewBox="0 0 24 24" class="${cls}" aria-hidden="true" focusable="false">${IC[k]}</svg>`;
@@ -888,7 +907,8 @@ function viewCalendario(t){
   const nVenc=Object.values(porDia).reduce((a,l)=>a+l.length,0);
   const pendMes=Object.values(porDia).flat().filter(x=>!current.gastos[x.id]?.pagado).length;
   return `<div class="card">
-    <div class="card-h"><div><h2>Calendario de ${esc(MESES[m])}</h2><div class="sub">${nVenc} vencimiento${nVenc===1?'':'s'} · ${pendMes? `${pendMes} sin pagar` : (nVenc?'todo pagado':'cargá el día en cada gasto')}</div></div></div>
+    <div class="card-h"><div><h2>Calendario de ${esc(MESES[m])}</h2><div class="sub">${nVenc} vencimiento${nVenc===1?'':'s'} · ${pendMes? `${pendMes} sin pagar` : (nVenc?'todo pagado':'cargá el día en cada gasto')}</div></div>
+      ${nVenc?`<button type="button" class="btn ghost btn-ics" data-act="ics" aria-label="Agregar los vencimientos de ${esc(MESES[m].toLowerCase())} a tu calendario">${svg('cal')}<span>Agregar al calendario</span></button>`:''}</div>
     <div class="cal-sem" aria-hidden="true">${['L','M','M','J','V','S','D'].map(x=>`<span>${x}</span>`).join('')}</div>
     <div class="cal" role="group" aria-label="Días de ${esc(MESES[m])} ${y}">${celdas}</div>
     <div class="cal-ley" aria-hidden="true"><span><i class="pend"></i>Pendiente</span><span><i class="pronto"></i>Vence pronto</span><span><i class="vencido"></i>Vencido</span><span><i class="ok"></i>Pagado</span></div>
@@ -1243,6 +1263,81 @@ function sheetRename(){
     actions:[{label:'Guardar',primary:true,fn:async(f,fd)=>{ const v=fd.get('mes').trim(); if(!validarForm(f, v?{}:{mes:'Escribí el mes y el año'})) return false; current.mesLabel=v; await saveAll(); render(); }}]});
 }
 
+/* ---------- Exportar vencimientos a calendario .ics (v2.2) ----------
+   Un evento de día completo por gasto fijo con día de vencimiento (topado al último día del mes, como el
+   calendario), en el mes de mesCal(). UID estable por gasto y mes: si se vuelve a importar, los
+   calendarios que respetan el UID actualizan en vez de duplicar. Alarma relativa al comienzo del día
+   (medianoche local): '-PT15H' = 9:00 del día anterior. La preferencia vive en meta.ics (no son datos:
+   no cambia el esquema). */
+const ICS_ALARMAS = {
+  no:{label:'Sin aviso', trig:null},
+  d0:{label:'El mismo día, a las 9', trig:'PT9H'},
+  '1d':{label:'1 día antes, a las 9', trig:'-PT15H'},
+  '2d':{label:'2 días antes, a las 9', trig:'-P1DT15H'},
+  '3d':{label:'3 días antes, a las 9', trig:'-P2DT15H'},
+  '7d':{label:'1 semana antes, a las 9', trig:'-P6DT15H'}
+};
+function icsItems(todos){
+  const {m,y,porDia}=vencimientosDelMes(), out=[];
+  Object.keys(porDia).map(Number).sort((a,b)=>a-b).forEach(d=>porDia[d].forEach(x=>{
+    const st=current.gastos[x.id]||{}; if(!todos && st.pagado) return;
+    out.push({x, dia:d, pagado:!!st.pagado, monto:eff(st.real,x.estimado)}); }));
+  return {m,y,items:out};
+}
+const icsEsc = t => String(t??'').replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\r?\n/g,'\\n');
+function icsFold(linea){ // corta en 75 octetos (UTF-8) sin partir caracteres
+  const enc=new TextEncoder(); let out='', cur='', n=0;
+  for(const ch of linea){ const b=enc.encode(ch).length; if(n+b>(out?74:75)){ out+=(out?'\r\n ':'')+cur; cur=''; n=0; } cur+=ch; n+=b; }
+  return out ? out+'\r\n '+cur : cur;
+}
+function armarICS({alarma='1d', todos=false}={}, ahora=new Date()){
+  const {m,y,items}=icsItems(todos), p2=n=>String(n).padStart(2,'0');
+  const fecha=(d)=>{ const f=new Date(y,m,d); return `${f.getFullYear()}${p2(f.getMonth()+1)}${p2(f.getDate())}`; };
+  const stamp=ahora.toISOString().replace(/[-:]/g,'').replace(/\.\d+/,'');
+  const trig=(ICS_ALARMAS[alarma]||ICS_ALARMAS['1d']).trig;
+  const L=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Control Mensual//Vencimientos '+VERSION+'//ES','CALSCALE:GREGORIAN','METHOD:PUBLISH',
+    'X-WR-CALNAME:'+icsEsc('Vencimientos · '+MESES[m]+' '+y)];
+  items.forEach(({x,dia,pagado,monto})=>{
+    const desc=[`Monto: ${money(monto)}`+(current.gastos[x.id]?.real!==''&&current.gastos[x.id]?.real!=null?'':' (estimado)'),
+      'Categoría: '+cat(x.categoria).label, pagado?'Estado: pagado':'Estado: sin pagar', x.nota?'Nota: '+x.nota:'', 'Desde Control Mensual'].filter(Boolean).join('\n');
+    L.push('BEGIN:VEVENT', `UID:cm-${x.id}-${y}${p2(m+1)}@control-mensual`, 'DTSTAMP:'+stamp,
+      'DTSTART;VALUE=DATE:'+fecha(dia), 'DTEND;VALUE=DATE:'+fecha(dia+1),
+      'SUMMARY:'+icsEsc(`${pagado?'✓ ':''}Vence ${x.nombre} · ${money(monto)}`), 'DESCRIPTION:'+icsEsc(desc),
+      'CATEGORIES:'+icsEsc(cat(x.categoria).label), 'TRANSP:TRANSPARENT');
+    if(trig && !pagado) L.push('BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:'+icsEsc(`Vence ${x.nombre} (${money(monto)})`),'TRIGGER:'+trig,'END:VALARM');
+    L.push('END:VEVENT');
+  });
+  L.push('END:VCALENDAR');
+  return {texto:L.map(icsFold).join('\r\n')+'\r\n', n:items.length, nombre:`vencimientos-${y}-${p2(m+1)}.ics`};
+}
+function icsPrevia(todos){
+  const {m,items}=icsItems(todos), tot=items.reduce((a,i)=>a+(i.pagado?0:i.monto),0);
+  if(!items.length) return `<div class="ics-prev"><div class="empty" style="padding:16px 6px">${todos?'Ningún gasto fijo tiene día de vencimiento.':'No queda nada por pagar con día de vencimiento este mes.'}</div></div>`;
+  return `<div class="ics-prev" aria-live="polite"><div class="ics-h"><span>${items.length} evento${items.length>1?'s':''} en ${esc(MESES[m].toLowerCase())}</span><span>${tot?'Falta pagar '+money(tot):'Todo pagado'}</span></div>
+    ${items.map(i=>`<div class="ics-row${i.pagado?' pagado':''}"><span class="d">Día ${i.dia}</span><span class="n">${i.pagado?'✓ ':''}${esc(i.x.nombre)}</span><span class="a">${money(i.monto)}</span></div>`).join('')}</div>`;
+}
+function sheetICS(){
+  const [m,y]=mesCal();
+  const opts=Object.entries(ICS_ALARMAS).map(([k,v])=>`<option value="${k}" ${k===ui.ics.alarma?'selected':''}>${v.label}</option>`).join('');
+  openSheet({title:'Agregar al calendario', body:`<p class="sheet-note">Descargá los vencimientos de <b style="color:var(--text)">${esc(MESES[m])} ${y}</b> y abrí el archivo: el celular te ofrece sumarlos a tu calendario. En la compu, importalo desde la configuración de tu calendario.</p>
+    <div class="fields">
+      <div class="field full"><label>Aviso</label><select class="inp" name="alarma">${opts}</select></div>
+      <div class="field full"><label>Qué gastos</label><select class="inp" name="todos"><option value="0" ${ui.ics.todos?'':'selected'}>Solo los que faltan pagar</option><option value="1" ${ui.ics.todos?'selected':''}>Todos, también los pagados</option></select></div>
+    </div>
+    <div id="ics-prev">${icsPrevia(ui.ics.todos)}</div>
+    <p class="sheet-note" style="margin:12px 0 0;font-size:12.5px">Algunos calendarios usan sus propios recordatorios al importar. Si cambiás montos o días, volvé a descargarlo.</p>`,
+    actions:[{label:'Cancelar',cls:'ghost',fn:()=>{}},{label:'Descargar .ics',primary:true,fn:async(form,fd)=>{
+      const pref={alarma:ICS_ALARMAS[fd.get('alarma')]?fd.get('alarma'):'1d', todos:fd.get('todos')==='1'};
+      const r=armarICS(pref);
+      if(!r.n){ form.querySelector('#ics-prev').innerHTML=icsPrevia(pref.todos); return false; }
+      ui.ics=pref; download(r.nombre, r.texto, 'text/calendar;charset=utf-8');
+      try{ await metaPatch(mt=>{ mt.ics=pref; }); }catch(e){}
+      toast(`Descargado: ${r.n} vencimiento${r.n>1?'s':''}. Abrilo para sumarlo al calendario`);
+    }}]});
+  const f=sheetActual?.form;
+  f?.querySelector('[name=todos]')?.addEventListener('change', e=>{ f.querySelector('#ics-prev').innerHTML=icsPrevia(e.target.value==='1'); });
+}
+
 /* ---------- Menú ---------- */
 function download(name, content, type){
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([content],{type})); a.download=name;
@@ -1253,6 +1348,7 @@ const MENU = {
     await marcarRespaldo(); },
   restore(){ document.getElementById('file-import').click(); },
   copiar(){ sheetCopiar(); },
+  ics(){ sheetICS(); },
   pegar(){ sheetPegar(); },
   csv(){
     const q=v=>`"${String(v??'').replace(/"/g,'""')}"`;
@@ -1348,6 +1444,7 @@ function sheetMenu(){
     it('copiar','copy','Copiar respaldo','Como texto, si no te deja descargar')+
     it('pegar','paste','Pegar respaldo','Recuperar datos desde ese texto')+
     it('csv','table','Exportar mes a Excel','CSV con ingresos, fijos y movimientos')+
+    it('ics','cal','Agregar vencimientos al calendario','Archivo .ics con aviso, para el celular o la compu')+
     it('theme','moon','Cambiar tema','Alternar entre modo claro y oscuro')+
     it('reset','reset','Reiniciar mes actual','Vaciar montos reales y movimientos')+
     it('novedades','spark','Novedades'+(ui.novedad?'<span class="badge-new">NUEVO</span>':''),'Qué cambió en la versión '+VERSION)+
@@ -1384,6 +1481,7 @@ document.addEventListener('click', async e=>{
     case 'filtro': ui.filtro=el.dataset.f; render(); break;
     case 'vista': ui.vistaFijos=el.dataset.f; render(); break;
     case 'cal-dia': ui.diaCal=Number(el.dataset.i); render(); break;
+    case 'ics': sheetICS(); break;
     case 'ver-cal': ui.tab='fijos'; ui.vistaFijos='cal'; ui.diaCal=null; render(); window.scrollTo({top:0,behavior:'smooth'}); break;
     case 'aviso-pagar': { const st=current.gastos[id], cur=current, x=config.gastos.find(g=>g.id===id); if(!st||!x) break;
       st.pagado=true; await saveAll(); render();
