@@ -42,6 +42,10 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     31→30, DTEND al día siguiente), VALARM según el aviso elegido (y ninguno en «Sin aviso» o pagados), CRLF,
     líneas de ≤75 octetos, texto escapado; «Todos» suma los pagados; la elección queda en meta.ics y se
     recuerda al recargar; sin días → mensaje sin descarga; datos sin cambios; contraste AA; 390/1280 claro/oscuro
+  - (v2.3) «Agregar a Google Calendar» en la hoja de cada gasto fijo (fecha fija): enlace a calendar.google.com
+    (action=TEMPLATE, todo el día, 31→30, título con monto real o estimado, detalles con categoría, estado y nota),
+    abre en pestaña nueva; usa lo escrito sin guardar; sin día → oculto con indicación; gasto nuevo; datos sin
+    cambios; contraste AA; 390/1280 claro/oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -932,6 +936,77 @@ def ics(b):
     check(not errs, f'sin errores {errs}')
     ctx.close()
 
+def gcal(b):
+    from urllib.parse import urlparse, parse_qs
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    g = lambda i, n, m, v, c='servicios', nota='': {'id': i, 'nombre': n, 'estimado': m, 'categoria': c, 'vence': v, 'nota': nota}
+    gs = [g('ga', 'Luz de prueba', 20000, 15, nota='Cliente de prueba 123'), g('gb', 'Colegio & cuota', 90000, 31, 'educacion'), g('gd', 'Sin día de prueba', 9000, '')]
+    est = {x['id']: {'real': '', 'pagado': False} for x in gs}; est['ga']['real'] = 23500
+    seed = {'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 900000, 'nota': ''}], 'gastos': gs},
+            'current': {'mesLabel': 'Noviembre 2026', 'gastos': est, 'ingresos': {'i1': {'real': '', 'cobrado': False}}, 'movimientos': []}, 'history': []}
+    def q(page):
+        u = urlparse(page.get_attribute('.sheet .btn-gcal', 'href') or '')
+        return u, {k: v[0] for k, v in parse_qs(u.query).items()}
+    def abrir(page, id):
+        page.click(f'.row-main[data-act=edit-gasto][data-id={id}]'); page.wait_for_selector('.sheet #gcal'); page.wait_for_timeout(400)
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark')]:
+        label = f'gcal {w} {theme}'
+        print(f'\n== Agregar a Google Calendar (v2.3) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=seed, fecha='2026-11-10T10:00:00')
+        antes = (get(page, 'config'), get(page, 'current'))
+        page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+        abrir(page, 'ga')
+        a = page.locator('.sheet .btn-gcal')
+        check(a.is_visible() and 'Agregar a Google Calendar' in a.inner_text(), f'{label}: botón visible en la hoja del gasto')
+        check(a.get_attribute('target') == '_blank' and 'noopener' in (a.get_attribute('rel') or ''), f'{label}: abre en pestaña nueva (noopener)')
+        u, p = q(page)
+        check(u.scheme == 'https' and u.netloc == 'calendar.google.com' and u.path == '/calendar/render' and p.get('action') == 'TEMPLATE', f'{label}: enlace de Google Calendar ({u.geturl()[:60]})')
+        check(p.get('dates') == '20261115/20261116', f'{label}: día 15, todo el día ({p.get("dates")})')
+        check(p.get('text', '').replace('\xa0', ' ') == 'Vence Luz de prueba · $ 23.500', f'{label}: título con monto real ({p.get("text")!r})')
+        det = p.get('details', '')
+        check('Categoría: ' in det and 'Estado: sin pagar' in det and 'Nota: Cliente de prueba 123' in det and '(estimado)' not in det, f'{label}: detalles ({det!r})')
+        check('15 de noviembre 2026' in page.inner_text('#gcal p'), f'{label}: indica la fecha')
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en la hoja {[(o["t"], o["r"]) for o in malos]}')
+        no_hscroll(page, w, label + ' hoja')
+        page.locator('.sheet #gcal').scroll_into_view_if_needed()
+        page.screenshot(path=str(SHOTS / f'gcal-{w}-{theme}.png'))
+        # Usa lo escrito sin guardar
+        page.fill('.sheet [name=vence]', '31'); page.fill('.sheet [name=real]', ''); page.fill('.sheet [name=nota]', 'Otra nota')
+        u, p = q(page)
+        check(p.get('dates') == '20261130/20261201', f'{label}: 31 cae el 30 de noviembre ({p.get("dates")})')
+        check(p.get('text', '').replace('\xa0', ' ') == 'Vence Luz de prueba · $ 20.000' and '(estimado)' in p.get('details', '') and 'Otra nota' in p.get('details', ''), f'{label}: usa estimado y nota escritos')
+        page.fill('.sheet [name=vence]', '')
+        check(not a.is_visible() and 'Poné el día de vencimiento' in page.inner_text('#gcal p'), f'{label}: sin día, el botón se oculta y lo indica')
+        page.fill('.sheet [name=vence]', '15')
+        if w == 1280:
+            with ctx.expect_page() as np:
+                a.click()
+            nueva = np.value
+            check(nueva.url.startswith('https://calendar.google.com/calendar/render?action=TEMPLATE'), f'{label}: al tocar abre Google Calendar en otra pestaña')
+            nueva.close()
+        page.keyboard.press('Escape'); page.wait_for_timeout(200)
+        check((get(page, 'config'), get(page, 'current')) == antes, f'{label}: los datos no cambian si no se guarda')
+        abrir(page, 'gd')
+        check(not page.locator('.sheet .btn-gcal').is_visible(), f'{label}: gasto sin día: sin botón')
+        page.keyboard.press('Escape'); page.wait_for_timeout(200)
+        abrir(page, 'gb'); u, p = q(page)
+        check(p.get('text') and '&' in p['text'] and p.get('dates') == '20261130/20261201', f'{label}: caracteres especiales y 31→30')
+        page.keyboard.press('Escape'); page.wait_for_timeout(200)
+        # Gasto nuevo
+        page.click('[data-act=add-gasto]') if page.locator('[data-act=add-gasto]').count() else None
+        if page.locator('.sheet #gcal').count():
+            page.wait_for_timeout(400)
+            check(not page.locator('.sheet .btn-gcal').is_visible(), f'{label}: gasto nuevo sin día: sin botón')
+            page.fill('.sheet [name=nombre]', 'Nuevo de prueba'); page.fill('.sheet [name=vence]', '3'); page.fill('.sheet [name=estimado]', '1.000')
+            u, p = q(page)
+            check(p.get('dates') == '20261103/20261104' and 'Nuevo de prueba' in p.get('text', ''), f'{label}: gasto nuevo con día genera enlace')
+            page.keyboard.press('Escape'); page.wait_for_timeout(200)
+        else:
+            check(False, f'{label}: no encontré el botón para agregar gasto')
+        check(not errs, f'{label}: sin errores {errs}')
+        ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -960,6 +1035,7 @@ with sync_playwright() as pw:
     calendario(b)
     aviso_vence(b)
     ics(b)
+    gcal(b)
     primera_vez(b)
     b.close()
 

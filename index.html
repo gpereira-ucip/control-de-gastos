@@ -160,6 +160,12 @@ button{cursor:pointer}
 .btn-ics{display:inline-flex;align-items:center;gap:6px;padding:8px 11px;font-size:12.5px;flex:none}
 .btn-ics svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 @media (max-width:420px){.btn-ics span{display:none}.btn-ics{padding:9px}}
+.gcal{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px}
+.gcal p{margin:0;font-size:12.5px;color:var(--muted)}
+.btn-gcal{display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;align-self:flex-start}
+.btn-gcal[hidden]{display:none}
+.btn-gcal svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+@media (max-width:420px){.btn-gcal{align-self:stretch}}
 .ics-prev{margin-top:14px;border:1px solid var(--border);border-radius:12px;padding:4px 12px}
 .ics-prev .ics-h{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;font-weight:800;color:var(--muted);padding:8px 0 6px}
 .ics-row{display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--border);font-size:13.5px}
@@ -333,8 +339,13 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '2.2';
+const VERSION = '2.3';
 const CHANGELOG = [
+  {v:'2.3', fecha:'24 nov 2026', items:[
+    'Nuevo: «Agregar a Google Calendar» en cada gasto fijo. Abrí un gasto y tocá el botón: se abre Google Calendar con el vencimiento del mes ya cargado (día, nombre, monto, categoría y nota) para que lo guardes con un toque.',
+    'Si cambiás el día, el monto o la nota en la hoja, el enlace usa lo que escribiste.',
+    'Si el gasto todavía no tiene día de vencimiento, la hoja te avisa que lo completes.'
+  ]},
   {v:'2.2', fecha:'23 nov 2026', items:[
     'Nuevo: «Agregar al calendario». Descargás los vencimientos del mes en un archivo .ics y los sumás al calendario del celular o de la compu.',
     'Elegís cuándo querés el aviso: el mismo día, 1, 2 o 3 días antes, una semana antes o sin aviso. La app recuerda tu elección.',
@@ -1207,7 +1218,10 @@ function sheetGasto(id){
     <div class="field"><label>Estimado mensual</label><input class="inp money" name="estimado" inputmode="decimal" value="${numStr(x.estimado)}" placeholder="$ 0"></div>
     <div class="field"><label>Real este mes</label><input class="inp money" name="real" inputmode="decimal" value="${numStr(s.real)}" placeholder="${numStr(x.estimado)||'$ 0'}"></div>
     <div class="field full"><label>Nota</label><input class="inp" name="nota" value="${esc(x.nota)}" placeholder="Opcional"></div>
-  </div>`});
+  </div>
+  <div class="gcal" id="gcal"><a class="btn ghost btn-gcal" target="_blank" rel="noopener" hidden>${svg('cal')}<span>Agregar a Google Calendar</span></a><p></p></div>`});
+  const f=sheetActual?.form;
+  if(f){ gcalBloque(f,id); f.addEventListener('input',()=>gcalBloque(f,id)); f.addEventListener('change',()=>gcalBloque(f,id)); }
 }
 function sheetIngreso(id){
   const x = id ? config.ingresos.find(g=>g.id===id) : {nombre:'',estimado:'',nota:''};
@@ -1261,6 +1275,36 @@ function sheetCerrar(){
 function sheetRename(){
   openSheet({title:'Nombre del mes', body:`<div class="field"><label>Mes y año</label><input class="inp" name="mes" value="${esc(current.mesLabel)}" placeholder="Ej: Noviembre 2026" maxlength="40"></div>`,
     actions:[{label:'Guardar',primary:true,fn:async(f,fd)=>{ const v=fd.get('mes').trim(); if(!validarForm(f, v?{}:{mes:'Escribí el mes y el año'})) return false; current.mesLabel=v; await saveAll(); render(); }}]});
+}
+
+/* ---------- Agregar a Google Calendar por gasto (v2.3) ----------
+   Enlace https://calendar.google.com/calendar/render?action=TEMPLATE con un evento de día completo
+   (dates=AAAAMMDD/AAAAMMDD+1) en el mes de mesCal(), día topado al último del mes. Usa los valores
+   escritos en la hoja (aunque no estén guardados). Sin cambio de esquema. */
+const GCAL_BASE='https://calendar.google.com/calendar/render';
+function gcalURL({nombre, dia, monto, estimado=false, categoria='otros', nota='', pagado=false}){
+  const [m,y]=mesCal(), d=Math.round(Number(dia));
+  if(!(d>=1)) return '';
+  const dd=Math.min(d, diasDelMes(m,y)), p2=n=>String(n).padStart(2,'0');
+  const f=x=>{ const t=new Date(y,m,x); return `${t.getFullYear()}${p2(t.getMonth()+1)}${p2(t.getDate())}`; };
+  const det=[`Monto: ${money(monto)}${estimado?' (estimado)':''}`, 'Categoría: '+cat(categoria).label,
+    pagado?'Estado: pagado':'Estado: sin pagar', nota?'Nota: '+nota:'', 'Desde Control Mensual'].filter(Boolean).join('\n');
+  const q=[['action','TEMPLATE'],['text',`Vence ${nombre||'gasto'} · ${money(monto)}`],['dates',f(dd)+'/'+f(dd+1)],['details',det]];
+  return GCAL_BASE+'?'+q.map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
+}
+function gcalDesdeForm(form, id){
+  const g=n=>String(form.querySelector(`[name=${n}]`)?.value??'').trim();
+  const vt=g('vence'), dia=/^\d{1,2}$/.test(vt)&&+vt>=1&&+vt<=31 ? +vt : 0;
+  const real=leerMonto(g('real')), est=leerMonto(g('estimado'));
+  const r=(!real.error && real.n!=='') ? real.n : null, e=(!est.error && est.n!=='') ? est.n : 0;
+  return {dia, url: dia ? gcalURL({nombre:g('nombre'), dia, monto:r??e, estimado:r==null, categoria:g('categoria'), nota:g('nota'), pagado:!!(id&&current.gastos[id]?.pagado)}) : ''};
+}
+function gcalBloque(form, id){
+  const box=form.querySelector('#gcal'); if(!box) return;
+  const {dia,url}=gcalDesdeForm(form,id), [m,y]=mesCal(), a=box.querySelector('a'), p=box.querySelector('p');
+  if(url){ a.href=url; a.hidden=false; const dd=Math.min(dia,diasDelMes(m,y));
+    p.textContent=`Abre Google Calendar con el vencimiento del ${dd} de ${MESES[m].toLowerCase()} ${y} listo para guardar.`; }
+  else { a.removeAttribute('href'); a.hidden=true; p.textContent='Poné el día de vencimiento para poder agregarlo a Google Calendar.'; }
 }
 
 /* ---------- Exportar vencimientos a calendario .ics (v2.2) ----------
