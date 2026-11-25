@@ -257,6 +257,10 @@ i.ok{background:var(--pos);box-shadow:none} i.pronto,i.hoy{background:var(--warn
 .nudge .ic{width:38px;height:38px;border-radius:10px;flex:none;display:grid;place-items:center;background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
 .nudge .ic svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .nudge-txt{flex:1;min-width:0}
+.nudge-links{display:flex;flex-wrap:wrap;column-gap:18px}
+.notif-estado{margin:0 0 10px;font-size:13.5px;font-weight:700}
+.notif-estado.on{color:var(--pos)}
+.notif-estado.off{color:var(--muted)}
 .nudge-alt{display:inline-block;margin-top:10px;padding:0;border:none;background:none;color:var(--muted);font-size:12.5px;font-weight:600;text-decoration:underline;text-underline-offset:3px}
 textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.4;word-break:break-all}
 .form-err{margin-top:10px;padding:10px 12px;border-radius:11px;font-size:13px;font-weight:600;background:color-mix(in srgb,var(--neg) 12%,transparent);color:var(--neg)}
@@ -339,8 +343,14 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '2.3';
+const VERSION = '2.4';
 const CHANGELOG = [
+  {v:'2.4', fecha:'25 nov 2026', items:[
+    'Nuevo: avisos del navegador. Si los activás, al abrir la app te llega una notificación cuando hay algo vencido, que vence hoy o en los próximos 3 días, con el total a pagar.',
+    'Llega una sola vez por día, para no molestarte. Tocarla te trae a la app.',
+    'Se activan desde el menú de Opciones › «Avisos del navegador» o desde el aviso de vencimientos del Resumen. Ahí también podés probarlos o desactivarlos.',
+    'Una página no puede avisarte con la app cerrada: para eso seguí usando «Agregar vencimientos al calendario».'
+  ]},
   {v:'2.3', fecha:'24 nov 2026', items:[
     'Nuevo: «Agregar a Google Calendar» en cada gasto fijo. Abrí un gasto y tocá el botón: se abre Google Calendar con el vencimiento del mes ya cargado (día, nombre, monto, categoría y nota) para que lo guardes con un toque.',
     'Si cambiás el día, el monto o la nota en la hoja, el enlace usa lo que escribiste.',
@@ -599,7 +609,7 @@ async function storeSetMany(entries){
 }
 
 let config, current, hist;
-const ui = {tab:'resumen', filtro:'todos', vistaFijos:'lista', diaCal:null, openHist:null, novedad:false, respaldo:null, ics:{alarma:'1d', todos:false}};
+const ui = {tab:'resumen', filtro:'todos', vistaFijos:'lista', diaCal:null, openHist:null, novedad:false, respaldo:null, ics:{alarma:'1d', todos:false}, notif:{activo:false, ultimo:null}};
 
 /* ---------- Aviso de respaldo (v1.4) ----------
    Vive en meta.respaldo = {ultimo: ms|null, base: ms, pospuesto: ms|null}. No es parte de los datos
@@ -689,6 +699,7 @@ async function load(){
   const rsp = (meta.respaldo && typeof meta.respaldo==='object') ? meta.respaldo : {ultimo:null, base: hadData?0:Date.now(), pospuesto:null};
   ui.respaldo = rsp;
   if(meta.ics && typeof meta.ics==='object'){ if(ICS_ALARMAS[meta.ics.alarma]) ui.ics.alarma=meta.ics.alarma; ui.ics.todos=!!meta.ics.todos; }
+  if(meta.notif && typeof meta.notif==='object'){ ui.notif.activo=!!meta.notif.activo; ui.notif.ultimo=typeof meta.notif.ultimo==='string'?meta.notif.ultimo:null; }
   await storeSet('meta', JSON.stringify({...meta, schemaVersion:SCHEMA_VERSION, appVersion:VERSION, respaldo:rsp}));
 }
 async function marcarNovedadesVistas(){
@@ -842,14 +853,17 @@ function venceTxt(o){
   if(o.diff===0) return 'Vence hoy';
   return o.diff===1 ? 'Vence mañana' : `Vence en ${o.diff} días`;
 }
+function vencTitulo(l){
+  const venc=l.filter(o=>o.diff<0), hoy=l.filter(o=>o.diff===0), pronto=l.filter(o=>o.diff>0);
+  if(venc.length) return venc.length===1 ? `${venc[0].x.nombre} está vencido` : `Tenés ${venc.length} gastos vencidos`;
+  if(hoy.length) return hoy.length===1 ? `Hoy vence ${hoy[0].x.nombre}` : `Hoy vencen ${hoy.length} gastos`;
+  return pronto.length===1 ? `${pronto[0].x.nombre}: ${venceTxt(pronto[0]).toLowerCase()}` : `${pronto.length} gastos vencen en los próximos días`;
+}
 function vencAviso(){
   const l=vencimientosAviso(); if(!l.length) return '';
   const venc=l.filter(o=>o.diff<0), hoy=l.filter(o=>o.diff===0), pronto=l.filter(o=>o.diff>0);
   const pl=(k,a,b)=>k===1?a:b, total=l.reduce((a,o)=>a+o.monto,0);
-  let titulo;
-  if(venc.length) titulo = venc.length===1 ? `${venc[0].x.nombre} está vencido` : `Tenés ${venc.length} gastos vencidos`;
-  else if(hoy.length) titulo = hoy.length===1 ? `Hoy vence ${hoy[0].x.nombre}` : `Hoy vencen ${hoy.length} gastos`;
-  else titulo = pronto.length===1 ? `${pronto[0].x.nombre}: ${venceTxt(pronto[0]).toLowerCase()}` : `${pronto.length} gastos vencen en los próximos días`;
+  const titulo=vencTitulo(l);
   const extra=[]; if(venc.length && hoy.length) extra.push(`${hoy.length} ${pl(hoy.length,'vence','vencen')} hoy`);
   if((venc.length||hoy.length) && pronto.length) extra.push(`${pronto.length} ${pl(pronto.length,'vence','vencen')} en los próximos días`);
   const nivel = venc.length?'danger':'warn';
@@ -862,8 +876,85 @@ function vencAviso(){
         <span class="va-amt">${money(o.monto)}</span>
         <button type="button" class="va-pay" data-act="aviso-pagar" data-id="${o.x.id}" aria-label="Marcar ${esc(o.x.nombre)} como pagado">${svg('check')}<span>Pagado</span></button>
       </div>`).join('')}</div>
-      <button type="button" class="nudge-alt" data-act="ver-cal">Ver en el calendario</button>
+      <div class="nudge-links"><button type="button" class="nudge-alt" data-act="ver-cal">Ver en el calendario</button>${notifOfrecer()?'<button type="button" class="nudge-alt" data-act="notif">Avisarme con una notificación</button>':''}</div>
     </div></div>`;
+}
+
+/* ---------- Notificaciones del navegador (v2.4) ----------
+   Preferencia en meta.notif = {activo, ultimo:'AAAA-MM-DD'|null} (no son datos: sin cambio de esquema), en ui.notif.
+   Al abrir la app y al volver a ella (visibilitychange) notifRevisar() avisa UNA vez por día si hay
+   vencimientosAviso() y permiso concedido. Con service worker (https) usa registration.showNotification
+   (Android no acepta new Notification); si no, new Notification. Una página no puede avisar con la app cerrada. */
+const notifSoporte = () => typeof window.Notification==='function' && typeof Notification.requestPermission==='function';
+const notifPermiso = () => notifSoporte() ? Notification.permission : 'no';
+const notifOfrecer = () => notifSoporte() && notifPermiso()!=='denied' && !(ui.notif.activo && notifPermiso()==='granted');
+function notifContenido(l){
+  const total=l.reduce((a,o)=>a+o.monto,0);
+  const filas=l.slice(0,4).map(o=>`${o.x.nombre} · ${venceTxt(o)} · ${money(o.monto)}`);
+  if(l.length>4) filas.push(`y ${l.length-4} más`);
+  return {titulo:vencTitulo(l), cuerpo:filas.join('\n')+`\nTotal a pagar: ${money(total)}`};
+}
+async function mostrarNotif(titulo, cuerpo){
+  const opts={body:cuerpo, tag:'control-mensual-vencimientos', lang:'es-AR', icon:'icon-192.png', badge:'icon-192.png', data:{url:location.href}};
+  try{
+    if(navigator.serviceWorker && location.protocol==='https:'){
+      const reg=await Promise.race([navigator.serviceWorker.getRegistration(), new Promise(r=>setTimeout(r,1500))]);
+      if(reg && reg.showNotification){ await reg.showNotification(titulo, opts); return true; }
+    }
+  }catch(e){}
+  try{ const n=new Notification(titulo, opts); n.onclick=()=>{ try{ window.focus(); }catch(e){} n.close(); ui.tab='resumen'; render(); }; return true; }
+  catch(e){ return false; }
+}
+async function guardarNotif(){ const v={...ui.notif}; await metaPatch(m=>{ m.notif=v; }); }
+async function notifRevisar(forzar){
+  if(!ui.notif.activo || notifPermiso()!=='granted') return false;
+  const l=vencimientosAviso(); if(!l.length) return false;
+  const hoy=todayISO(); if(ui.notif.ultimo===hoy && !forzar) return false;
+  ui.notif.ultimo=hoy; await guardarNotif();
+  const c=notifContenido(l); return mostrarNotif(c.titulo, c.cuerpo);
+}
+async function pedirPermisoNotif(){
+  try{
+    let res; const r=Notification.requestPermission(x=>{ res=x; });
+    if(r && typeof r.then==='function') res=await r;
+    return res || Notification.permission;
+  }catch(e){ return notifPermiso(); }
+}
+function notifEstadoTxt(){
+  const p=notifPermiso();
+  if(p==='no') return 'Este navegador no las permite';
+  if(p==='denied') return 'Bloqueadas en este navegador';
+  return ui.notif.activo && p==='granted' ? 'Activas: te avisan al abrir la app' : 'Avisos de vencimientos al abrir la app';
+}
+function sheetNotif(){
+  const p=notifPermiso(), activo=ui.notif.activo && p==='granted';
+  const limite=`<p class="sheet-note">Una página no puede avisarte con la app cerrada: el aviso llega cuando la abrís o volvés a ella, una vez por día. Para que el celular te avise aunque no la abras, sumá los vencimientos a tu calendario.</p>
+    <button type="button" class="menu-item" data-run="ics"><span class="ic">${svg('cal')}</span><span>Agregar vencimientos al calendario<small>Archivo .ics con aviso, para el celular o la compu</small></span></button>`;
+  const estado=(cls,t)=>`<p class="notif-estado ${cls}" role="status">${t}</p>`;
+  if(p==='no') return openSheet({title:'Avisos del navegador', body:`${estado('off','Este navegador no permite notificaciones')}
+    <p class="sheet-note">Suele pasar en el iPhone cuando la app se abre como página o archivo. Si la agregás a la pantalla de inicio desde su dirección web (iOS 16.4 o más nuevo), las notificaciones funcionan. En Android y en la compu, probá con Chrome.</p>${limite}`,
+    actions:[{label:'Entendido',primary:true,fn:()=>{}}]});
+  if(p==='denied') return openSheet({title:'Avisos del navegador', body:`${estado('off','Las notificaciones están bloqueadas para esta página')}
+    <p class="sheet-note">Para activarlas, tocá el candado o el ícono junto a la dirección › <b style="color:var(--text)">Permisos</b> › <b style="color:var(--text)">Notificaciones</b> › <b style="color:var(--text)">Permitir</b>, y volvé a abrir la app.</p>${limite}`,
+    actions:[{label:'Entendido',primary:true,fn:()=>{}}]});
+  const l=vencimientosAviso();
+  const hoyTxt = l.length ? `Hoy: ${esc(vencTitulo(l))}.` : 'Hoy no hay nada vencido ni por vencer en los próximos días.';
+  if(activo) return openSheet({title:'Avisos del navegador', body:`${estado('on','✓ Activos en este navegador')}
+    <p class="sheet-note">Al abrir la app te llega una notificación si hay algo vencido, que vence hoy o en los próximos ${VENCE_PRONTO_DIAS} días, con el total a pagar. ${hoyTxt}</p>${limite}<div class="msg" aria-live="polite"></div>`,
+    actions:[{label:'Desactivar',cls:'ghost',fn:async()=>{ ui.notif.activo=false; await guardarNotif(); render(); toast('Avisos del navegador desactivados'); }},
+      {label:'Probar',cls:'ghost',fn:async form=>{ const ok = l.length ? await notifRevisar(true) : await mostrarNotif('Control Mensual', 'Así te vamos a avisar de los vencimientos. Hoy no hay nada pendiente.');
+        form.querySelector('.msg').innerHTML = ok ? '<p class="sheet-note" style="margin:8px 0 0">Listo: mirá la notificación.</p>' : '<div class="form-err">El navegador no dejó mostrar la notificación.</div>'; return false; }},
+      {label:'Listo',primary:true,fn:()=>{}}]});
+  openSheet({title:'Avisos del navegador', body:`${estado('off','Desactivados')}
+    <p class="sheet-note">Si los activás, al abrir la app te llega una notificación cuando hay algo vencido, que vence hoy o en los próximos ${VENCE_PRONTO_DIAS} días, con el total a pagar. ${hoyTxt}</p>
+    <p class="sheet-note">El navegador te va a pedir permiso: elegí <b style="color:var(--text)">Permitir</b>.</p>${limite}<div class="msg" aria-live="polite"></div>`,
+    actions:[{label:'Ahora no',cls:'ghost',fn:()=>{}},{label:'Activar avisos',primary:true,fn:async form=>{
+      const r=await pedirPermisoNotif();
+      if(r!=='granted'){ form.querySelector('.msg').innerHTML = `<div class="form-err" role="alert">${r==='denied'?'El navegador bloqueó las notificaciones. Podés habilitarlas desde el candado junto a la dirección › Permisos › Notificaciones.':'No diste permiso todavía. Probá de nuevo y elegí «Permitir».'}</div>`; return false; }
+      ui.notif.activo=true; ui.notif.ultimo=null; await guardarNotif(); render();
+      const ok = l.length ? await notifRevisar() : await mostrarNotif('Control Mensual', 'Listo: así te vamos a avisar de los vencimientos.');
+      toast(ok ? 'Avisos activados' : 'Avisos activados (el navegador no mostró la prueba)');
+    }}]});
 }
 function viewResumen(t){
   /* Checklist del mes (pedido de Gonzalo, 14/11/2026): se ven todos los gastos fijos y lo tildado queda tildado en su lugar. */
@@ -1393,6 +1484,7 @@ const MENU = {
   restore(){ document.getElementById('file-import').click(); },
   copiar(){ sheetCopiar(); },
   ics(){ sheetICS(); },
+  notif(){ sheetNotif(); },
   pegar(){ sheetPegar(); },
   csv(){
     const q=v=>`"${String(v??'').replace(/"/g,'""')}"`;
@@ -1489,6 +1581,7 @@ function sheetMenu(){
     it('pegar','paste','Pegar respaldo','Recuperar datos desde ese texto')+
     it('csv','table','Exportar mes a Excel','CSV con ingresos, fijos y movimientos')+
     it('ics','cal','Agregar vencimientos al calendario','Archivo .ics con aviso, para el celular o la compu')+
+    it('notif','bell','Avisos del navegador',esc(notifEstadoTxt()))+
     it('theme','moon','Cambiar tema','Alternar entre modo claro y oscuro')+
     it('reset','reset','Reiniciar mes actual','Vaciar montos reales y movimientos')+
     it('novedades','spark','Novedades'+(ui.novedad?'<span class="badge-new">NUEVO</span>':''),'Qué cambió en la versión '+VERSION)+
@@ -1526,6 +1619,7 @@ document.addEventListener('click', async e=>{
     case 'vista': ui.vistaFijos=el.dataset.f; render(); break;
     case 'cal-dia': ui.diaCal=Number(el.dataset.i); render(); break;
     case 'ics': sheetICS(); break;
+    case 'notif': sheetNotif(); break;
     case 'ver-cal': ui.tab='fijos'; ui.vistaFijos='cal'; ui.diaCal=null; render(); window.scrollTo({top:0,behavior:'smooth'}); break;
     case 'aviso-pagar': { const st=current.gastos[id], cur=current, x=config.gastos.find(g=>g.id===id); if(!st||!x) break;
       st.pagado=true; await saveAll(); render();
@@ -1595,6 +1689,8 @@ matchMedia('(max-width:720px)').addEventListener?.('change',()=>render());
   render();
   if(store.recuperado==='local-vacio') toast('Recuperamos tus datos desde la copia interna');
   else if(store.recuperado==='idb-mas-nueva') toast('Se usó la copia interna, que era la más reciente');
+  notifRevisar().catch(()=>{});
+  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible' && config) notifRevisar().catch(()=>{}); });
 })();
 </script>
 </body>

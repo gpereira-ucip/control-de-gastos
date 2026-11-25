@@ -46,6 +46,11 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     (action=TEMPLATE, todo el día, 31→30, título con monto real o estimado, detalles con categoría, estado y nota),
     abre en pestaña nueva; usa lo escrito sin guardar; sin día → oculto con indicación; gasto nuevo; datos sin
     cambios; contraste AA; 390/1280 claro/oscuro
+  - (v2.4) avisos del navegador (Notification simulada, fecha fija): enlace en el aviso de vencimientos y opción en
+    el menú; activar pide permiso, guarda meta.notif y muestra la notificación (título y total); una sola por día
+    (al recargar no repite; al día siguiente sí; al volver a la app con visibilitychange); permiso negado → mensaje
+    en línea; bloqueadas o sin soporte → sin enlace e instrucciones; «Probar» y «Desactivar»; otro mes sin aviso;
+    datos sin cambios; contraste AA; 390/1280 claro/oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -72,8 +77,9 @@ V10 = {
     'history': [{'mesLabel': 'Septiembre 2026', 'ingresos': 900000, 'gastos': 700000, 'ahorro': 200000, 'guardado': '2026-10-01'}],
 }
 
-def new_page(b, w, h, theme=None, seed=None, fecha=None):
+def new_page(b, w, h, theme=None, seed=None, fecha=None, init=None):
     ctx = b.new_context(viewport={'width': w, 'height': h}, device_scale_factor=1)
+    if init: ctx.add_init_script(init)
     if fecha: ctx.clock.set_fixed_time(fecha)  # 'AAAA-MM-DDTHH:MM:SS' (hora local)
     # Google Fonts es el único recurso externo permitido (con respaldo del sistema): sin red, se responde vacío.
     ctx.route(lambda u: not u.startswith('file:'), lambda r: r.fulfill(status=200, body='', content_type='text/css'))
@@ -88,6 +94,7 @@ def new_page(b, w, h, theme=None, seed=None, fecha=None):
         page.evaluate("""([seed, theme, P]) => new Promise(res => { localStorage.clear();
             if (seed) for (const [k, v] of Object.entries(seed)) localStorage.setItem(P + k, JSON.stringify(v));
             if (theme) localStorage.setItem(P + 'theme', theme);
+            try { if (typeof store !== 'undefined' && store.idb) store.idb.close(); } catch (e) {}  // si no, el borrado queda bloqueado y la base vieja puede ganarle a la semilla
             const rq = indexedDB.deleteDatabase('control-mensual'); rq.onsuccess = rq.onerror = rq.onblocked = () => res(true); })""", [seed, theme, P])
         page.reload()
     page.wait_for_selector('.hero')
@@ -1007,6 +1014,116 @@ def gcal(b):
         check(not errs, f'{label}: sin errores {errs}')
         ctx.close()
 
+# Notification simulada: estado en window.name (sobrevive a recargas y no toca el almacenamiento): 'perm', 'resp' y 'notifs'.
+NOTIF_MOCK = """(() => { if (%s) { delete window.Notification; return; }
+  const st = () => { try { return JSON.parse(window.name || '{}'); } catch (e) { return {}; } };
+  const ss = {getItem: k => st()[k] ?? null, setItem: (k, v) => { const o = st(); o[k] = v; window.name = JSON.stringify(o); }}; if (!ss.getItem('perm')) ss.setItem('perm', '%s');
+  class N { constructor(t, o) { const l = JSON.parse(ss.getItem('notifs') || '[]'); l.push({t, body: o && o.body, tag: o && o.tag}); ss.setItem('notifs', JSON.stringify(l)); this.onclick = null; window.__ultima = this; }
+    close() {} static get permission() { return ss.getItem('perm'); }
+    static requestPermission() { const r = ss.getItem('resp') || 'granted'; ss.setItem('perm', r); return Promise.resolve(r); } }
+  window.Notification = N; })();"""
+
+def notif(b):
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    notifs = lambda page: page.evaluate("JSON.parse(JSON.parse(window.name||'{}').notifs||'[]')")
+    g = lambda i, n, m, v: {'id': i, 'nombre': n, 'estimado': m, 'categoria': 'servicios', 'vence': v, 'nota': ''}
+    gs = [g('ga', 'Atrasado de prueba', 11000, 10), g('gb', 'Luz de prueba', 20000, 15), g('gx', 'Lejano de prueba', 10000, 25)]
+    def datos(mes='Noviembre 2026', meta=None):
+        d = {'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 900000, 'nota': ''}], 'gastos': gs},
+             'current': {'mesLabel': mes, 'gastos': {x['id']: {'real': '', 'pagado': False} for x in gs}, 'ingresos': {'i1': {'real': '', 'cobrado': False}}, 'movimientos': []},
+             'history': []}
+        if meta is not None: d['meta'] = {'schemaVersion': 1, 'appVersion': '2.4', 'vistoNovedades': ['2.4'], 'respaldo': {'ultimo': 1795000000000, 'base': 0, 'pospuesto': None}, **meta}
+        return d
+    F = '2026-11-15T10:00:00'
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark'), (390, 844, 'dark'), (1280, 900, 'light')]:
+        label = f'notif {w} {theme}'
+        print(f'\n== Avisos del navegador (v2.4) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=datos(), fecha=F, init=NOTIF_MOCK % ('false', 'default'))
+        page.evaluate("(() => { const o = JSON.parse(window.name||'{}'); delete o.notifs; window.name = JSON.stringify(o); })()")
+        antes = (get(page, 'config'), get(page, 'current'))
+        link = page.locator('#aviso-vence [data-act=notif]')
+        check(link.count() == 1 and link.inner_text() == 'Avisarme con una notificación', f'{label}: enlace en el aviso de vencimientos')
+        check(notifs(page) == [], f'{label}: sin activar no se notifica')
+        no_hscroll(page, w, label)
+        page.screenshot(path=str(SHOTS / f'notif-aviso-{w}-{theme}.png'))
+        link.click(); page.wait_for_selector('.sheet .notif-estado'); page.wait_for_timeout(400)
+        check('Desactivados' in page.inner_text('.notif-estado'), f'{label}: la hoja dice que están desactivados')
+        check('Atrasado de prueba está vencido' in page.inner_text('.sheet'), f'{label}: cuenta lo de hoy')
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en la hoja {[(o["t"], o["r"]) for o in malos]}')
+        no_hscroll(page, w, label + ' hoja')
+        page.screenshot(path=str(SHOTS / f'notif-hoja-{w}-{theme}.png'))
+        page.click('.sheet .actions button:has-text("Activar avisos")'); page.wait_for_timeout(400)
+        n = notifs(page)
+        check(len(n) == 1 and n[0]['t'] == 'Atrasado de prueba está vencido', f'{label}: al activar llega la notificación ({n})')
+        body = (n[0]['body'] if n else '').replace('\xa0', ' ')
+        check('Atrasado de prueba · Vencido · día 10' in body and 'Luz de prueba · Vence hoy' in body and 'Total a pagar: $ 31.000' in body and 'Lejano' not in body, f'{label}: cuerpo con filas y total ({body!r})')
+        m = get(page, 'meta')
+        check(m.get('notif') == {'activo': True, 'ultimo': '2026-11-15'}, f'{label}: meta.notif guardado ({m.get("notif")})')
+        check(page.locator('.sheet').count() == 0 and page.locator('#aviso-vence [data-act=notif]').count() == 0, f'{label}: se cierra la hoja y el enlace desaparece')
+        check('Avisos activados' in page.inner_text('#toast'), f'{label}: aviso «Avisos activados»')
+        page.evaluate("window.__ultima.onclick && window.__ultima.onclick()")
+        check(page.locator('.nav [data-tab=resumen]').get_attribute('aria-current') == 'page', f'{label}: tocar la notificación lleva al Resumen')
+        page.reload(); page.wait_for_selector('.hero'); page.wait_for_timeout(300)
+        check(len(notifs(page)) == 1, f'{label}: al recargar el mismo día no repite')
+        page.evaluate("ui.notif.ultimo='2026-11-14'; document.dispatchEvent(new Event('visibilitychange'))"); page.wait_for_timeout(300)
+        check(len(notifs(page)) == 2, f'{label}: al volver a la app otro día avisa de nuevo')
+        # Menú y hoja activa
+        page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet .menu-item[data-run=notif]')
+        check('Activas' in page.inner_text('.menu-item[data-run=notif]'), f'{label}: el menú muestra el estado')
+        page.click('.menu-item[data-run=notif]'); page.wait_for_selector('.sheet .notif-estado.on'); page.wait_for_timeout(400)
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en la hoja activa {[(o["t"], o["r"]) for o in malos]}')
+        page.screenshot(path=str(SHOTS / f'notif-activa-{w}-{theme}.png'))
+        page.click('.sheet .actions button:has-text("Probar")'); page.wait_for_timeout(300)
+        check(len(notifs(page)) == 3 and page.locator('.sheet').count() == 1, f'{label}: «Probar» muestra una y deja la hoja abierta')
+        page.click('.sheet .actions button:has-text("Desactivar")'); page.wait_for_timeout(300)
+        check(get(page, 'meta')['notif']['activo'] is False and page.locator('#aviso-vence [data-act=notif]').count() == 1, f'{label}: «Desactivar» guarda y vuelve el enlace')
+        page.evaluate("ui.notif.ultimo=null; document.dispatchEvent(new Event('visibilitychange'))"); page.wait_for_timeout(300)
+        check(len(notifs(page)) == 3, f'{label}: desactivados no avisa')
+        check((get(page, 'config'), get(page, 'current')) == antes, f'{label}: los datos no cambian')
+        check(not errs, f'{label}: sin errores {errs}')
+        ctx.close()
+    print('\n== Avisos del navegador: otros casos')
+    # Día siguiente con avisos activos: avisa al abrir, una vez
+    ctx, page, errs = new_page(b, 390, 844, seed=datos(meta={'notif': {'activo': True, 'ultimo': '2026-11-14'}}), fecha=F, init=NOTIF_MOCK % ('false', 'granted'))
+    page.wait_for_timeout(300)
+    check(len(notifs(page)) >= 1 and notifs(page)[-1]['t'] == 'Atrasado de prueba está vencido', 'activos: al abrir otro día avisa')
+    check(get(page, 'meta')['notif']['ultimo'] == '2026-11-15' and get(page, 'meta')['schemaVersion'] == 1, 'anota el día y conserva meta')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    # Otro mes: no avisa
+    ctx, page, errs = new_page(b, 390, 844, seed=datos('Octubre 2026', meta={'notif': {'activo': True, 'ultimo': None}}), fecha=F, init=NOTIF_MOCK % ('false', 'granted'))
+    page.wait_for_timeout(300)
+    check(notifs(page) == [], 'mes que no es el actual: sin notificación')
+    ctx.close()
+    # Activos pero el navegador revocó el permiso: no avisa ni ofrece enlace
+    ctx, page, errs = new_page(b, 390, 844, seed=datos(meta={'notif': {'activo': True, 'ultimo': None}}), fecha=F, init=NOTIF_MOCK % ('false', 'denied'))
+    page.wait_for_timeout(300)
+    check(notifs(page) == [] and page.locator('#aviso-vence [data-act=notif]').count() == 0, 'bloqueadas: sin notificación y sin enlace')
+    page.click('.appbar [data-act=menu]'); page.wait_for_selector('.menu-item[data-run=notif]')
+    check('Bloqueadas' in page.inner_text('.menu-item[data-run=notif]'), 'menú: «Bloqueadas»')
+    page.click('.menu-item[data-run=notif]'); page.wait_for_selector('.sheet .notif-estado')
+    check('Permisos' in page.inner_text('.sheet') and page.locator('.sheet [data-run=ics]').count() == 1, 'bloqueadas: explica cómo habilitarlas y ofrece el calendario')
+    page.click('.sheet [data-run=ics]'); page.wait_for_timeout(200)
+    check('calendario' in page.inner_text('#sheet-title').lower(), 'el enlace abre «Agregar al calendario»')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    # Permiso negado al pedirlo: mensaje en línea, no activa
+    ctx, page, errs = new_page(b, 390, 844, seed=datos(), fecha=F, init=NOTIF_MOCK % ('false', 'default'))
+    page.evaluate("(() => { const o = JSON.parse(window.name||'{}'); o.resp = 'denied'; window.name = JSON.stringify(o); })()")
+    page.click('#aviso-vence [data-act=notif]'); page.wait_for_selector('.sheet .notif-estado')
+    page.click('.sheet .actions button:has-text("Activar avisos")'); page.wait_for_timeout(300)
+    check(page.locator('.sheet .form-err').count() == 1 and 'bloqueó' in page.inner_text('.sheet .form-err'), 'permiso negado: mensaje en la hoja')
+    check(not (get(page, 'meta') or {}).get('notif', {}).get('activo') and notifs(page) == [], 'permiso negado: no se activa ni notifica')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    # Sin soporte (p. ej. Safari de iPhone como página)
+    ctx, page, errs = new_page(b, 390, 844, seed=datos(), fecha=F, init=NOTIF_MOCK % ('true', 'default'))
+    check(page.locator('#aviso-vence').count() == 1 and page.locator('#aviso-vence [data-act=notif]').count() == 0, 'sin soporte: aviso sin enlace')
+    page.click('.appbar [data-act=menu]'); page.wait_for_selector('.menu-item[data-run=notif]')
+    page.click('.menu-item[data-run=notif]'); page.wait_for_selector('.sheet .notif-estado')
+    check('no permite' in page.inner_text('.sheet') and 'pantalla de inicio' in page.inner_text('.sheet'), 'sin soporte: lo explica')
+    no_hscroll(page, 390, 'notif sin soporte')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -1036,6 +1153,7 @@ with sync_playwright() as pw:
     aviso_vence(b)
     ics(b)
     gcal(b)
+    notif(b)
     primera_vez(b)
     b.close()
 
