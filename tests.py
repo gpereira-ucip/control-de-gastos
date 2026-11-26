@@ -51,6 +51,11 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     (al recargar no repite; al día siguiente sí; al volver a la app con visibilitychange); permiso negado → mensaje
     en línea; bloqueadas o sin soporte → sin enlace e instrucciones; «Probar» y «Desactivar»; otro mes sin aviso;
     datos sin cambios; contraste AA; 390/1280 claro/oscuro
+  - (v2.5) anticipación del aviso (1, 3, 5 o 7 días; fecha fija): por defecto 3; opción en el menú, enlace en el
+    aviso y en la hoja de notificaciones; vista previa que cambia al elegir (también con flechas del teclado);
+    «Guardar» deja meta.aviso y cambia el aviso, el estado «pronto» del calendario, el texto de las notificaciones
+    y lo que notifica; «Cancelar» no cambia nada; se recuerda al recargar; meta sin la preferencia o con un valor
+    inválido usa 3; otro mes lo explica; datos sin cambios; contraste AA; 390/1280 claro/oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -1124,6 +1129,89 @@ def notif(b):
     no_hscroll(page, 390, 'notif sin soporte')
     check(not errs, f'sin errores {errs}'); ctx.close()
 
+def anticipo(b):
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    g = lambda i, n, m, v: {'id': i, 'nombre': n, 'estimado': m, 'categoria': 'servicios', 'vence': v, 'nota': ''}
+    gs = [g('ga', 'Atrasado de prueba', 11000, 10), g('gb', 'Luz de prueba', 20000, 15), g('gc', 'Cuota de prueba', 30000, 17),
+          g('gd', 'Gas de prueba', 4000, 19), g('ge', 'Club de prueba', 5000, 21), g('gx', 'Lejano de prueba', 10000, 25)]
+    def datos(mes='Noviembre 2026', meta=None):
+        d = {'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 900000, 'nota': ''}], 'gastos': gs},
+             'current': {'mesLabel': mes, 'gastos': {x['id']: {'real': '', 'pagado': False} for x in gs}, 'ingresos': {'i1': {'real': '', 'cobrado': False}}, 'movimientos': []},
+             'history': []}
+        if meta is not None: d['meta'] = {'schemaVersion': 1, 'appVersion': '2.4', 'vistoNovedades': ['2.4'], 'respaldo': {'ultimo': 1795000000000, 'base': 0, 'pospuesto': None}, **meta}
+        return d
+    filas = lambda page: page.evaluate("[...document.querySelectorAll('#aviso-vence .va-row')].map(e=>e.dataset.key.slice(3))")
+    pronto = lambda page, d: page.locator(f'.cal-d[data-i="{d}"] .cal-dots i.pronto').count() > 0
+    F = '2026-11-15T10:00:00'
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark'), (390, 844, 'dark'), (1280, 900, 'light')]:
+        label = f'anticipo {w} {theme}'
+        print(f'\n== Anticipación del aviso (v2.5) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=datos(meta={}), fecha=F)
+        antes = (get(page, 'config'), get(page, 'current'))
+        check(filas(page) == ['ga', 'gb', 'gc'], f'{label}: por defecto avisa 3 días antes ({filas(page)})')
+        link = page.locator('#aviso-vence [data-act=anticipo]')
+        check(link.count() == 1 and link.inner_text() == 'Avisar 3 días antes · cambiar', f'{label}: enlace en el aviso')
+        page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet .menu-item[data-run=anticipo]')
+        check('Te avisa 3 días antes del vencimiento' in page.inner_text('.menu-item[data-run=anticipo]'), f'{label}: opción en el menú con el valor')
+        page.click('.menu-item[data-run=anticipo]'); page.wait_for_selector('.sheet .ant-opts'); page.wait_for_timeout(300)
+        check(page.evaluate("document.querySelector('.sheet [name=dias]:checked').value") == '3', f'{label}: la hoja marca 3')
+        prev = page.inner_text('#ant-prev').replace('\xa0', ' ')
+        check('3 gastos' in prev and '$ 61.000' in prev, f'{label}: vista previa con 3 días ({prev[:80]!r})')
+        page.click('.ant-opt:has(input[value="7"])'); page.wait_for_timeout(150)
+        prev = page.inner_text('#ant-prev').replace('\xa0', ' ')
+        check('Con 7 días' in prev and '5 gastos' in prev and '$ 70.000' in prev and 'Club de prueba · Vence en 6 días' in prev and 'Lejano' not in prev, f'{label}: vista previa cambia a 7 ({prev[:140]!r})')
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en la hoja {[(o["t"], o["r"]) for o in malos]}')
+        no_hscroll(page, w, label + ' hoja')
+        page.screenshot(path=str(SHOTS / f'anticipo-hoja-{w}-{theme}.png'))
+        page.click('.sheet .actions button:has-text("Guardar")'); page.wait_for_timeout(300)
+        check(get(page, 'meta').get('aviso') == {'dias': 7}, f'{label}: guarda meta.aviso ({get(page, "meta").get("aviso")})')
+        check(page.locator('.sheet').count() == 0 and 'te avisamos 7 días antes' in page.inner_text('#toast'), f'{label}: cierra y avisa')
+        check(filas(page) == ['ga', 'gb', 'gc', 'gd', 'ge'], f'{label}: el aviso suma lo de 4 y 6 días ({filas(page)})')
+        check(link.inner_text() == 'Avisar 7 días antes · cambiar', f'{label}: el enlace muestra 7')
+        no_hscroll(page, w, label)
+        page.screenshot(path=str(SHOTS / f'anticipo-aviso-{w}-{theme}.png'))
+        page.click('#aviso-vence [data-act=ver-cal]'); page.wait_for_timeout(200)
+        check(pronto(page, 21) and not pronto(page, 25), f'{label}: en el calendario el 21 «vence pronto» y el 25 no')
+        page.reload(); page.wait_for_selector('.hero'); page.wait_for_timeout(200)
+        check(filas(page) == ['ga', 'gb', 'gc', 'gd', 'ge'], f'{label}: se recuerda al recargar')
+        # Cambiar a 1 desde el aviso, con el teclado
+        page.click('#aviso-vence [data-act=anticipo]'); page.wait_for_selector('.sheet .ant-opts'); page.wait_for_timeout(300)
+        page.focus('.sheet [name=dias]:checked'); page.keyboard.press('ArrowLeft'); page.keyboard.press('ArrowLeft'); page.keyboard.press('ArrowLeft'); page.wait_for_timeout(150)
+        check(page.evaluate("document.querySelector('.sheet [name=dias]:checked').value") == '1' and 'Con 1 día' in page.inner_text('#ant-prev'), f'{label}: con flechas se elige 1 y cambia la vista previa')
+        page.keyboard.press('Enter'); page.wait_for_timeout(300)
+        check(get(page, 'meta')['aviso'] == {'dias': 1} and filas(page) == ['ga', 'gb'], f'{label}: con 1 día solo vencido y hoy ({filas(page)})')
+        # Cancelar no cambia
+        page.click('#aviso-vence [data-act=anticipo]'); page.wait_for_selector('.sheet .ant-opts'); page.wait_for_timeout(300)
+        page.click('.ant-opt:has(input[value="5"])'); page.click('.sheet .actions button:has-text("Cancelar")'); page.wait_for_timeout(200)
+        check(get(page, 'meta')['aviso'] == {'dias': 1} and filas(page) == ['ga', 'gb'], f'{label}: «Cancelar» no cambia nada')
+        check((get(page, 'config'), get(page, 'current')) == antes, f'{label}: los datos no cambian')
+        check(not errs, f'{label}: sin errores {errs}')
+        ctx.close()
+    print('\n== Anticipación del aviso: otros casos')
+    ctx, page, errs = new_page(b, 390, 844, seed=datos(meta={'aviso': {'dias': 4}}), fecha=F)
+    check(filas(page) == ['ga', 'gb', 'gc'], 'valor inválido guardado (4): usa 3')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    ctx, page, errs = new_page(b, 390, 844, seed=datos(meta={'aviso': {'dias': 5}}), fecha=F)
+    check(filas(page) == ['ga', 'gb', 'gc', 'gd'], 'guardado 5: suma lo de 4 días, no lo de 6')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    # Notificaciones con 7 días: texto de la hoja, enlace y contenido
+    ctx, page, errs = new_page(b, 390, 844, seed=datos(meta={'aviso': {'dias': 7}, 'notif': {'activo': True, 'ultimo': None}}), fecha=F, init=NOTIF_MOCK % ('false', 'granted'))
+    n = page.evaluate("JSON.parse(JSON.parse(window.name||'{}').notifs||'[]')")
+    body = (n[-1]['body'] if n else '').replace('\xa0', ' ')
+    check('Gas de prueba · Vence en 4 días' in body and 'y 1 más' in body and 'Total a pagar: $ 70.000' in body, f'la notificación usa 7 días ({body!r})')
+    page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet .menu-item[data-run=notif]')
+    page.click('.menu-item[data-run=notif]'); page.wait_for_selector('.sheet .notif-estado'); page.wait_for_timeout(300)
+    check('los próximos 7 días' in page.inner_text('.sheet'), 'la hoja de avisos del navegador dice 7 días')
+    page.click('.sheet [data-run=anticipo]'); page.wait_for_selector('.sheet .ant-opts')
+    check(page.inner_text('#sheet-title') == 'Anticipación del aviso', 'desde la hoja de avisos se abre la anticipación')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    # Otro mes: la vista previa lo explica
+    ctx, page, errs = new_page(b, 390, 844, seed=datos(mes='Octubre 2026', meta={}), fecha=F)
+    page.click('.appbar [data-act=menu]'); page.click('.menu-item[data-run=anticipo]'); page.wait_for_selector('#ant-prev')
+    check('solo en el mes en curso' in page.inner_text('#ant-prev'), 'otro mes: la vista previa explica que el aviso es del mes en curso')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -1154,6 +1242,7 @@ with sync_playwright() as pw:
     ics(b)
     gcal(b)
     notif(b)
+    anticipo(b)
     primera_vez(b)
     b.close()
 
