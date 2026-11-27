@@ -143,6 +143,15 @@ button{cursor:pointer}
 .field[hidden]{display:none}
 .frec-hint{grid-column:1/-1;margin:-2px 2px 0;font-size:12.5px;color:var(--muted)}
 .frec-hint:empty{display:none}
+.prov-tot{text-align:right;flex:none}.prov-tot b{display:block;font-size:18px;font-weight:800;letter-spacing:-.01em}
+.prov-tot span,.prov-amt span{display:block;font-size:11.5px;color:var(--muted);font-weight:600}
+.prov-row{padding:12px 2px;border-top:1px solid var(--border)}
+.prov-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.prov-amt{text-align:right;flex:none}.prov-amt b{display:block;font-size:15px;font-weight:800}
+.prov-bar{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden;margin-top:10px}
+.prov-bar i{display:block;height:100%;border-radius:99px;background:var(--primary);transition:width .5s ease}
+.prov-cap{font-size:12px;color:var(--muted);margin-top:6px}
+.prov-res{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .amt-sub .up{color:var(--neg)}.amt-sub .down{color:var(--pos)}
 .chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:99px;
   background:color-mix(in srgb,var(--c) 14%,transparent);color:color-mix(in srgb,var(--c) var(--chip-mix,85%),var(--text))}
@@ -361,8 +370,14 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '2.6';
+const VERSION = '2.7';
 const CHANGELOG = [
+  {v:'2.7', fecha:'27 nov 2026', items:[
+    'Nuevo: «Provisión sugerida» en Gastos fijos. Para cada gasto que no es mensual (seguro, patente, matrícula…) te dice cuánto apartar por mes para llegar al pago sin juntarlo de golpe.',
+    'Ves el total a apartar por mes, cuándo es cada pago y cuánto tendrías que tener juntado a esta altura.',
+    'En el Resumen aparece el total y cómo queda el ahorro si repartís esos pagos mes a mes. En la hoja del gasto, al elegir la frecuencia, también te muestra cuánto apartar.',
+    'Es solo una cuenta (el estimado dividido por los meses entre pago y pago): no cambia tus datos ni tus totales.'
+  ]},
   {v:'2.6', fecha:'27 nov 2026', items:[
     'Nuevo: cada gasto fijo tiene su frecuencia: mensual, bimestral, trimestral, semestral o anual.',
     'Para los que no son mensuales elegís un mes en que se pagan y la app calcula el resto (por ejemplo, trimestral desde enero: enero, abril, julio y octubre).',
@@ -540,6 +555,22 @@ const gastosDelMes = () => config.gastos.filter(tocaEsteMes);
 const gastosFuera = () => config.gastos.filter(x=>!tocaEsteMes(x));
 function proximoPago(x, m, y){ for(let k=0;k<12;k++){ const mm=(m+k)%12, yy=y+Math.floor((m+k)/12); if(tocaEn(x,mm)) return [mm,yy]; } return [m,y]; }
 const yLista = a => a.length<2 ? a.join('') : a.slice(0,-1).join(', ')+' y '+a[a.length-1];
+/* Provisión mensual sugerida (v2.7, ítem 18): para los gastos que no son mensuales, cuánto apartar por mes
+   (estimado ÷ meses entre pago y pago, redondeado hacia arriba) y cuánto convendría tener juntado hoy si se viene
+   apartando desde el último pago. Es solo un cálculo: no se guarda nada (sin cambio de esquema). */
+const provMensual = x => { const n=FRECS[frecDe(x)].n; return n>1 ? Math.ceil((Number(x.estimado)||0)/n) : 0; };
+function provInfo(x, m, y){
+  const n=FRECS[frecDe(x)].n, est=Number(x.estimado)||0, [pm,py]=proximoPago(x,m,y), k=(py-y)*12+(pm-m), mensual=provMensual(x);
+  return {x, n, est, mensual, pm, py, k, juntado:Math.min(est, mensual*(n-k))};
+}
+function provisiones(){ const [m,y]=mesCal(); return config.gastos.filter(x=>FRECS[frecDe(x)].n>1).map(x=>provInfo(x,m,y)).sort((a,b)=>a.k-b.k || b.est-a.est); }
+/* Total por mes y ahorro «parejo»: el del mes, devolviendo lo no mensual que toca ahora y restando la provisión de todos. */
+function provResumen(t){
+  const l=provisiones(); if(!l.length) return null;
+  const total=l.reduce((a,o)=>a+o.mensual,0);
+  const tocaAhora=l.filter(o=>o.k===0).reduce((a,o)=>a+eff(current.gastos[o.x.id]?.real,o.est),0);
+  return {n:l.length, total, ahorro:t.ahorro+tocaAhora-total};
+}
 const mesesPagoTxt = x => yLista(MESES.map((n,i)=>i).filter(i=>tocaEn(x,i)).map(i=>MESES[i].toLowerCase()));
 const catOptions = sel => Object.entries(CATS).map(([k,v])=>`<option value="${k}" ${k===sel?'selected':''}>${v.label}</option>`).join('');
 
@@ -867,7 +898,7 @@ function gastoFueraRow(x){
     <span class="check off" aria-hidden="true"></span>
     <div class="row-main" data-act="edit-gasto" data-id="${x.id}" role="button" tabindex="0" aria-label="Editar ${esc(x.nombre)}, ${fl.toLowerCase()}, ${money(x.estimado)}; no se paga este mes, el próximo pago es en ${esc(prox)}">
       <div class="row-title">${esc(x.nombre)}</div>
-      <div class="row-meta">${chip(x.categoria)}<span class="tag">${fl}</span><span>Próximo: ${esc(prox)}</span></div>
+      <div class="row-meta">${chip(x.categoria)}<span class="tag">${fl}</span><span>Próximo: ${esc(prox)}</span>${provMensual(x)?`<span>Apartá ${money(provMensual(x))}/mes</span>`:''}</div>
     </div>
     <div class="row-amt" data-act="edit-gasto" data-id="${x.id}" aria-hidden="true"><div class="amt">${money(x.estimado)}</div><div class="amt-sub">Este mes no</div></div>
   </div>`;
@@ -1047,6 +1078,10 @@ function sheetAnticipo(){
   const f=sheetActual?.form;
   f?.querySelectorAll('[name=dias]').forEach(r=>r.addEventListener('change', e=>{ f.querySelector('#ant-prev').innerHTML=antPrevia(Number(e.target.value)); }));
 }
+function provNota(t){
+  const p=provResumen(t); if(!p) return '';
+  return `<div class="fuera-nota prov-res" data-key="prov-res"><span>Provisión sugerida para ${p.n===1?'el gasto no mensual':`los ${p.n} gastos no mensuales`}: <b>${money(p.total)}</b> por mes. Repartiendo esos pagos mes a mes, el ahorro queda en <b>${money(p.ahorro)}</b>.</span><button class="link" data-act="ver-prov">Ver detalle</button></div>`;
+}
 function viewResumen(t){
   /* Checklist del mes (pedido de Gonzalo, 14/11/2026): se ven todos los gastos fijos y lo tildado queda tildado en su lugar. */
   const lista = gastosDelMes().sort((a,b)=>(Number(a.vence)||99)-(Number(b.vence)||99));
@@ -1055,7 +1090,8 @@ function viewResumen(t){
     <div class="card"><div class="card-h"><h2>Gastos del mes</h2><span class="sub">${t.nPag} de ${t.nFijos} pagados</span></div>
       ${lista.length? lista.map(gastoRow).join('') : `<div class="empty"><b>Sin gastos fijos</b>Agregalos desde «Gastos fijos».</div>`}
       ${lista.length && t.nPag===t.nFijos? `<div class="empty"><b>¡Todo pagado!</b>No quedan gastos fijos pendientes este mes.</div>` : ''}
-      ${t.nFuera? `<p class="fuera-nota">${t.nFuera===1?'1 gasto no se paga este mes por su frecuencia. Lo ves':`${t.nFuera} gastos no se pagan este mes por su frecuencia. Los ves`} en «Gastos fijos».</p>` : ''}</div>
+      ${t.nFuera? `<p class="fuera-nota">${t.nFuera===1?'1 gasto no se paga este mes por su frecuencia. Lo ves':`${t.nFuera} gastos no se pagan este mes por su frecuencia. Los ves`} en «Gastos fijos».</p>` : ''}
+      ${provNota(t)}</div>
   </div>
   <div class="card" style="margin-top:16px"><div class="card-h"><h2>Ingresos</h2><span class="sub">Cobrado ${money(t.cobrado)} de ${money(t.ingresos)}</span></div>
     ${config.ingresos.map(ingresoRow).join('')}
@@ -1129,7 +1165,22 @@ function viewFijosLista(t){
     ${items.length? items.map(gastoRow).join('') : `<div class="empty">Nada para mostrar con este filtro.</div>`}
     ${fuera.length? `<div class="fuera-h" data-key="fuera-h"><span>No se pagan en ${esc(MESES[mesCal()[0]].toLowerCase())}</span><span>${fuera.length}</span></div>${fuera.map(gastoFueraRow).join('')}` : ''}
     <button class="add-row" data-act="add-gasto">+ Agregar gasto fijo</button>
-  </div>`;
+  </div>${provCard()}`;
+}
+function provCard(){
+  const l=provisiones(); if(!l.length) return '';
+  const tot=l.reduce((a,o)=>a+o.mensual,0), [m,y]=mesCal();
+  const fila=o=>{ const prox=MESES[o.pm].toLowerCase()+(o.py!==y?' '+o.py:''), cuando=o.k===0?'se paga este mes':o.k===1?'falta 1 mes':`faltan ${o.k} meses`, pct=o.est?o.juntado/o.est*100:0;
+    return `<div class="prov-row" data-key="p-${o.x.id}">
+      <div class="prov-top"><div><div class="row-title">${esc(o.x.nombre)}</div><div class="row-meta"><span class="tag">${FRECS[frecDe(o.x)].label}</span><span>${money(o.est)} en ${esc(prox)} · ${cuando}</span></div></div>
+        <div class="prov-amt"><b>${money(o.mensual)}</b><span>por mes</span></div></div>
+      <div class="prov-bar" aria-hidden="true"><i style="width:${pct.toFixed(1)}%"></i></div>
+      <div class="prov-cap">${o.k===0?`Este mes se paga: tendrías que tener los ${money(o.est)} completos.`:`Si venís apartando desde el último pago, tendrías que tener ${money(o.juntado)} de ${money(o.est)}.`}</div>
+    </div>`; };
+  return `<div class="card prov" style="margin-top:16px" data-key="prov" id="provision">
+    <div class="card-h"><div><h2>Provisión sugerida</h2><div class="sub">${l.length===1?'1 gasto no mensual':`${l.length} gastos no mensuales`}</div></div><div class="prov-tot"><b>${money(tot)}</b><span>apartar por mes</span></div></div>
+    <p class="sheet-note">Si apartás esto todos los meses, cuando llega cada pago ya tenés la plata. Es una sugerencia: el estimado dividido por los meses entre pago y pago.</p>
+    ${l.map(fila).join('')}</div>`;
 }
 function viewMov(t){
   const byDay={};
@@ -1429,7 +1480,8 @@ function frecBloque(form){
   if(mens){ hint.textContent=''; return; }
   const [pm,py]=proximoPago(g,m,y);
   hint.textContent = (g.frecuencia==='anual' ? `Se paga una vez por año, en ${MESES[g.mesPago].toLowerCase()}.` : `Se paga en ${mesesPagoTxt(g)}.`)
-    + (toca ? ` Este mes (${MESES[m].toLowerCase()}) toca.` : ` En ${MESES[m].toLowerCase()} no toca: el próximo pago es en ${MESES[pm].toLowerCase()} ${py}.`);
+    + (toca ? ` Este mes (${MESES[m].toLowerCase()}) toca.` : ` En ${MESES[m].toLowerCase()} no toca: el próximo pago es en ${MESES[pm].toLowerCase()} ${py}.`)
+    + (()=>{ const r=leerMonto(form.querySelector('[name=estimado]')?.value||''), n=FRECS[g.frecuencia].n; return r.n>0 ? ` Para no juntarlo de golpe, apartá ${money(Math.ceil(r.n/n))} por mes.` : ''; })();
 }
 function sheetIngreso(id){
   const x = id ? config.ingresos.find(g=>g.id===id) : {nombre:'',estimado:'',nota:''};
@@ -1741,6 +1793,7 @@ document.addEventListener('click', async e=>{
     case 'ics': sheetICS(); break;
     case 'notif': sheetNotif(); break;
     case 'anticipo': sheetAnticipo(); break;
+    case 'ver-prov': ui.tab='fijos'; ui.vistaFijos='lista'; render(); { const c=document.getElementById('provision'); if(c) c.scrollIntoView({behavior:'smooth',block:'start'}); } break;
     case 'ver-cal': ui.tab='fijos'; ui.vistaFijos='cal'; ui.diaCal=null; render(); window.scrollTo({top:0,behavior:'smooth'}); break;
     case 'aviso-pagar': { const st=current.gastos[id], cur=current, x=config.gastos.find(g=>g.id===id); if(!st||!x) break;
       st.pagado=true; await saveAll(); render();

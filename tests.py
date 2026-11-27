@@ -62,6 +62,11 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     no está en el Resumen, el calendario ni el aviso, y se ve aparte en Gastos fijos con «Próximo: enero 2027»; uno
     bimestral que toca lleva su etiqueta y avisa; Google Calendar apunta al próximo pago; se recuerda al recargar;
     al cerrar el mes cambia lo que toca; respaldo del esquema 1 restaurado migra; contraste AA; 390/1280 claro/oscuro
+  - (v2.7) provisión sugerida (fecha fija 15/11/2026): sin gastos no mensuales no aparece; anual 120.000 en marzo →
+    10.000/mes, «faltan 4 meses», juntado 80.000; trimestral 30.001 que toca este mes → 10.001/mes y completo;
+    total, orden (primero lo que toca), fila aparte «Apartá $/mes», texto de la hoja (y con lo escrito), Resumen con
+    total y ahorro parejo (t.ahorro + lo que toca − provisión), «Ver detalle» lleva a la tarjeta, totales y datos
+    intactos, recarga; contraste AA; 390 claro y 1280 oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -1302,6 +1307,70 @@ def frecuencia(b):
     check(all(x['frecuencia'] == 'mensual' for x in get(page, 'config')['gastos']), 'respaldo del esquema 1 restaurado queda mensual')
     check(not errs, f'sin errores {errs}'); ctx.close()
 
+def provision(b):
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    def g(i, n, m, v, fr='mensual', mp=None): return {'id': i, 'nombre': n, 'estimado': m, 'categoria': 'servicios', 'vence': v, 'nota': '', 'frecuencia': fr, 'mesPago': mp}
+    base = [g('ga', 'Luz de prueba', 20000, 20)]
+    seed = lambda gs: {'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 900000, 'nota': ''}], 'gastos': gs},
+            'current': {'mesLabel': 'Noviembre 2026', 'gastos': {x['id']: {'real': '', 'pagado': False} for x in gs}, 'ingresos': {'i1': {'real': '', 'cobrado': False}}, 'movimientos': []},
+            'history': [], 'meta': {'schemaVersion': 2, 'appVersion': '2.7', 'vistoNovedades': ['2.7'], 'respaldo': {'ultimo': 1795000000000, 'base': 0, 'pospuesto': None}}}
+    F = '2026-11-15T10:00:00'
+    print('\n== Provisión sugerida (v2.7): sin gastos no mensuales')
+    ctx, page, errs = new_page(b, 390, 844, seed=seed(base), fecha=F)
+    check(page.locator('[data-key=prov-res]').count() == 0, 'Resumen sin nota de provisión')
+    page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+    check(page.locator('#provision').count() == 0, 'Gastos fijos sin tarjeta de provisión')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    gs = base + [g('gb', 'Seguro de prueba', 120000, 10, 'anual', 2), g('gc', 'Patente de prueba', 30001, 25, 'trimestral', 1)]
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark')]:
+        label = f'provisión {w} {theme}'
+        print(f'\n== Provisión sugerida (v2.7) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=seed(gs), fecha=F)
+        cfg0 = get(page, 'config')
+        t = page.evaluate('totals()')
+        check(t['fijos'] == 50001, f'{label}: totales sin cambios (la provisión no suma) {t["fijos"]}')
+        l = page.evaluate('provisiones().map(o=>({id:o.x.id,m:o.mensual,k:o.k,j:o.juntado}))')
+        check(l == [{'id': 'gc', 'm': 10001, 'k': 0, 'j': 30001}, {'id': 'gb', 'm': 10000, 'k': 4, 'j': 80000}], f'{label}: cálculo y orden {l}')
+        pr = page.evaluate('provResumen(totals())')
+        check(pr['total'] == 20001 and pr['ahorro'] == t['ahorro'] + 30001 - 20001, f'{label}: total y ahorro parejo {pr}')
+        nota = page.inner_text('[data-key=prov-res]')
+        check('$ 20.001' in nota.replace('\xa0', ' ') and 'los 2 gastos no mensuales' in nota and 'Ver detalle' in nota, f'{label}: nota en Resumen ({nota!r})')
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en Resumen {malos[:3]}')
+        page.screenshot(path=str(SHOTS / f'prov-resumen-{w}-{theme}.png'), full_page=True)
+        page.click('[data-act=ver-prov]'); page.wait_for_timeout(700)
+        check(page.evaluate('ui.tab') == 'fijos' and page.locator('#provision').is_visible(), f'{label}: «Ver detalle» lleva a la tarjeta')
+        top = page.evaluate("document.getElementById('provision').getBoundingClientRect().top")
+        check(-5 <= top < h / 2, f'{label}: la tarjeta queda a la vista (top {top})')
+        card = page.inner_text('#provision').replace('\xa0', ' ')
+        check('Provisión sugerida' in card and '$ 20.001' in card and '2 gastos no mensuales' in card, f'{label}: encabezado y total')
+        rb = page.inner_text('[data-key=p-gb]').replace('\xa0', ' ')
+        check('$ 10.000' in rb and 'marzo 2027' in rb and 'faltan 4 meses' in rb and '$ 80.000 de $ 120.000' in rb, f'{label}: fila del anual ({rb!r})')
+        rc = page.inner_text('[data-key=p-gc]').replace('\xa0', ' ')
+        check('$ 10.001' in rc and 'se paga este mes' in rc and 'completos' in rc, f'{label}: fila del trimestral que toca ({rc!r})')
+        wb = page.evaluate("document.querySelector('[data-key=p-gb] .prov-bar i').style.width")
+        check(wb.startswith('66.7'), f'{label}: barra al 66,7 % ({wb})')
+        check('Apartá $ 10.000/mes' in page.inner_text('.row.is-off[data-key=g-gb]').replace('\xa0', ' '), f'{label}: la fila aparte dice cuánto apartar')
+        no_hscroll(page, w, label)
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en Gastos fijos {malos[:3]}')
+        page.screenshot(path=str(SHOTS / f'prov-fijos-{w}-{theme}.png'), full_page=True)
+        # Hoja: texto con lo escrito
+        page.click('.row-main[data-act=edit-gasto][data-id=gb]'); page.wait_for_selector('.sheet #frec-hint')
+        hint = page.inner_text('#frec-hint').replace('\xa0', ' ')
+        check('apartá $ 10.000 por mes' in hint, f'{label}: la hoja dice cuánto apartar ({hint!r})')
+        page.fill('.sheet [name=estimado]', '240.000'); page.wait_for_timeout(150)
+        check('apartá $ 20.000 por mes' in page.inner_text('#frec-hint').replace('\xa0', ' '), f'{label}: se recalcula con lo escrito')
+        page.fill('.sheet [name=estimado]', 'abc'); page.wait_for_timeout(150)
+        check('apartá' not in page.inner_text('#frec-hint'), f'{label}: con un monto inválido no sugiere')
+        page.select_option('.sheet [name=frecuencia]', 'mensual'); page.wait_for_timeout(150)
+        check(page.inner_text('#frec-hint') == '', f'{label}: mensual sin texto')
+        page.keyboard.press('Escape'); page.wait_for_timeout(250)
+        check(get(page, 'config') == cfg0, f'{label}: datos intactos')
+        page.reload(); page.wait_for_selector('.hero')
+        check(page.locator('[data-key=prov-res]').count() == 1, f'{label}: sigue al recargar')
+        check(not errs, f'{label}: sin errores {errs}'); ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -1334,6 +1403,7 @@ with sync_playwright() as pw:
     notif(b)
     anticipo(b)
     frecuencia(b)
+    provision(b)
     primera_vez(b)
     b.close()
 
