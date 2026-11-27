@@ -302,6 +302,13 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 .venc-aviso.danger{border-left-color:var(--neg)}
 .venc-aviso.danger .ic{background:color-mix(in srgb,var(--neg) 14%,transparent);color:var(--neg)}
 .venc-aviso + .nudge{margin-top:12px}
+.deb-aviso + .nudge{margin-top:12px}
+.deb-btns{display:flex;gap:6px;flex:none}
+.chk-line{grid-column:1/-1;display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2);cursor:pointer}
+.chk-line input{width:18px;height:18px;margin:2px 0 0;accent-color:var(--primary);flex:none}
+.chk-line b{display:block;font-size:14px}
+.chk-line span{display:block;font-size:12.5px;color:var(--muted);margin-top:2px}
+i.conf{background:var(--warn);box-shadow:none;outline:1.5px dashed var(--warn);outline-offset:1.5px}
 .venc-aviso p strong{color:var(--text)}
 .va-list{margin-top:10px;display:flex;flex-direction:column}
 .va-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--border)}
@@ -370,8 +377,14 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '2.7';
+const VERSION = '2.8';
 const CHANGELOG = [
+  {v:'2.8', fecha:'27 nov 2026', items:[
+    'Nuevo: marcá un gasto fijo como «Débito automático» desde su hoja.',
+    'Cuando pasa su día de vencimiento, el Resumen te pregunta «¿Se debitó?»: con «Sí» queda pagado; con «No» vuelve a figurar como vencido. Si hay varios, podés confirmarlos todos juntos. Siempre con «Deshacer».',
+    'Mientras esperan tu confirmación, los débitos no aparecen como vencidos; antes de la fecha, el aviso dice «Se debita mañana», «Se debita hoy», etc.',
+    'Tus gastos de siempre quedaron sin débito automático: no cambia nada hasta que lo elijas.'
+  ]},
   {v:'2.7', fecha:'27 nov 2026', items:[
     'Nuevo: «Provisión sugerida» en Gastos fijos. Para cada gasto que no es mensual (seguro, patente, matrícula…) te dice cuánto apartar por mes para llegar al pago sin juntarlo de golpe.',
     'Ves el total a apartar por mes, cuándo es cada pago y cuánto tendrías que tener juntado a esta altura.',
@@ -722,7 +735,7 @@ function respaldoAviso(){
    schemaVersion 0 = datos de la v1.0 (sin número de esquema).
    Para cambiar la estructura: subir SCHEMA_VERSION y agregar MIGRATIONS[n](d) que
    reciba {config,current,history} del esquema n-1 y devuelva el del esquema n. */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MIGRATIONS = {
   1(d){
     const c=d.config||{}; c.ingresos=Array.isArray(c.ingresos)?c.ingresos:[]; c.gastos=Array.isArray(c.gastos)?c.gastos:[];
@@ -737,6 +750,10 @@ const MIGRATIONS = {
   2(d){ // v2.6: frecuencia de cada gasto fijo; todo lo que había queda mensual
     const c=d.config||{}; (Array.isArray(c.gastos)?c.gastos:[]).forEach(x=>{ if(!FRECS[x.frecuencia]) x.frecuencia='mensual'; if(x.mesPago===undefined) x.mesPago=null; });
     return {...d, config:c};
+  },
+  3(d){ // v2.8: débito automático por gasto fijo; todo lo que había queda sin débito
+    const c=d.config||{}; (Array.isArray(c.gastos)?c.gastos:[]).forEach(x=>{ x.debito = x.debito===true; });
+    return {...d, config:c};
   }
 };
 function migrateData(d, from){
@@ -747,7 +764,7 @@ function migrateData(d, from){
 
 function normalize(){
   config.ingresos ||= []; config.gastos ||= [];
-  config.gastos.forEach(x=>{ x.categoria ||= guessCat(x.nombre); if(x.vence==null) x.vence=''; if(!FRECS[x.frecuencia]) x.frecuencia='mensual'; if(x.mesPago===undefined) x.mesPago=null; });
+  config.gastos.forEach(x=>{ x.categoria ||= guessCat(x.nombre); if(x.vence==null) x.vence=''; if(!FRECS[x.frecuencia]) x.frecuencia='mensual'; if(x.mesPago===undefined) x.mesPago=null; x.debito = x.debito===true; });
   current.gastos ||= {}; current.ingresos ||= {}; current.movimientos ||= [];
   config.gastos.forEach(x=>{ current.gastos[x.id] ||= {real:'',pagado:false}; });
   config.ingresos.forEach(x=>{ current.ingresos[x.id] ||= {real:'',cobrado:false}; });
@@ -816,6 +833,7 @@ function venceTag(x, st){
   if(st.pagado) return `<span class="tag">Día ${d}</span>`;
   if(m===now.getMonth() && y===now.getFullYear()){
     const diff=d-now.getDate();
+    if(esDebAConfirmar(x, st, diff)) return `<span class="tag warn">¿Se debitó? · día ${d}</span>`;
     if(diff<0) return `<span class="tag danger">Vencido · día ${d}</span>`;
     if(diff===0) return `<span class="tag warn">Vence hoy</span>`;
     if(diff<=3) return `<span class="tag warn">Vence en ${diff} día${diff>1?'s':''}</span>`;
@@ -838,6 +856,7 @@ const IC = {
   moon:'<path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/>',
   lock:'<path d="M6 11h12v9H6zM8 11V8a4 4 0 018 0v3"/>',
   reset:'<path d="M4 4v6h6M20 12a8 8 0 01-14.9 4M4 12a8 8 0 0114.9-4"/>',
+  card:'<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18M7 15h3"/>',
   bell:'<path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15zM10 20.5a2 2 0 004 0"/>',
   clock:'<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2.5h6"/>',
   cal:'<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4M12 13v5M9.5 15.5h5"/>',
@@ -886,7 +905,7 @@ function gastoRow(x){
     <button class="check" data-act="toggle-gasto" data-id="${x.id}" aria-pressed="${!!s.pagado}" aria-label="${esc(x.nombre)}: pagado">${svg('check')}</button>
     <div class="row-main" data-act="edit-gasto" data-id="${x.id}" role="button" tabindex="0" aria-label="Editar ${esc(x.nombre)}, ${money(v)}${s.pagado?', pagado':''}">
       <div class="row-title">${esc(x.nombre)}</div>
-      <div class="row-meta">${chip(x.categoria)}${venceTag(x,s)}${frecDe(x)!=='mensual'?`<span class="tag">${FRECS[frecDe(x)].label}</span>`:''}${x.nota?`<span>${esc(x.nota)}</span>`:''}</div>
+      <div class="row-meta">${chip(x.categoria)}${venceTag(x,s)}${x.debito===true?'<span class="tag">Débito aut.</span>':''}${frecDe(x)!=='mensual'?`<span class="tag">${FRECS[frecDe(x)].label}</span>`:''}${x.nota?`<span>${esc(x.nota)}</span>`:''}</div>
     </div>
     <div class="row-amt" data-act="edit-gasto" data-id="${x.id}" aria-hidden="true"><div class="amt">${money(v)}</div><div class="amt-sub">${sub}</div></div>
   </div>`;
@@ -934,6 +953,36 @@ function donut(t){
 const VENCE_PRONTO_DIAS = 3, AVISO_DIAS_OPC = [1,3,5,7];
 const avisoDias = () => AVISO_DIAS_OPC.includes(ui.avisoDias) ? ui.avisoDias : VENCE_PRONTO_DIAS;
 const diasTxt = d => d===1 ? '1 día' : `${d} días`;
+/* Débito automático (v2.8, ítem 19, esquema 3): config.gastos[].debito (bool). En el mes en curso, un débito sin pagar
+   cuyo día (topado al último del mes) ya pasó queda «a confirmar»: no se avisa como vencido; el Resumen pregunta
+   «¿Se debitó?» (#aviso-debito). «Sí» → pagado; «No» → current.gastos[id].debNo = true y vuelve a ser vencido.
+   El mes nuevo arranca sin debNo (newMonth). */
+const esDebAConfirmar = (x, s, diff) => x.debito===true && !s?.pagado && !s?.debNo && diff<0;
+function debitosAConfirmar(){
+  const [m,y]=parseMes(current.mesLabel), now=new Date();
+  if(m!==now.getMonth() || y!==now.getFullYear()) return [];
+  const n=diasDelMes(m,y), hoy=now.getDate(), out=[];
+  config.gastos.forEach(x=>{ const v=Math.round(Number(x.vence)); if(!x.debito || !v || v<1 || !tocaEn(x,m)) return;
+    const s=current.gastos[x.id], dia=Math.min(v,n);
+    if(s && esDebAConfirmar(x,s,dia-hoy)) out.push({x, dia, monto:eff(s.real,x.estimado)}); });
+  return out.sort((a,b)=>a.dia-b.dia || b.monto-a.monto);
+}
+function debAviso(){
+  const l=debitosAConfirmar(); if(!l.length) return '';
+  const total=l.reduce((a,o)=>a+o.monto,0);
+  const titulo = l.length===1 ? `¿Se debitó ${l[0].x.nombre}?` : `¿Se debitaron ${l.length} débitos automáticos?`;
+  return `<div class="card nudge deb-aviso" id="aviso-debito" role="status">
+    <span class="ic">${svg('card')}</span>
+    <div class="nudge-txt"><b>${esc(titulo)}</b>
+      <p>${l.length===1?'Ya pasó su día de vencimiento. Si se debitó, confirmalo y queda pagado.':'Ya pasó su día de vencimiento. Confirmá los que se debitaron y quedan pagados.'} Total: <strong>${money(total)}</strong></p>
+      <div class="va-list">${l.map(o=>`<div class="va-row" data-key="db-${o.x.id}">
+        <div class="va-main"><span class="va-nom">${esc(o.x.nombre)}</span><span class="tag warn">Débito · día ${o.dia}</span></div>
+        <span class="va-amt">${money(o.monto)}</span>
+        <span class="deb-btns"><button type="button" class="va-pay" data-act="deb-si" data-id="${o.x.id}" aria-label="Sí, ${esc(o.x.nombre)} se debitó: marcar como pagado">${svg('check')}<span>Sí</span></button><button type="button" class="va-pay" data-act="deb-no" data-id="${o.x.id}" aria-label="No, ${esc(o.x.nombre)} no se debitó">No</button></span>
+      </div>`).join('')}</div>
+      ${l.length>1?`<div class="nudge-act"><button type="button" class="btn primary" data-act="deb-todos">Se debitaron todos</button></div>`:''}
+    </div></div>`;
+}
 function vencimientosAviso(dias=avisoDias()){
   const [m,y]=parseMes(current.mesLabel), now=new Date();
   if(m!==now.getMonth() || y!==now.getFullYear()) return [];
@@ -941,10 +990,12 @@ function vencimientosAviso(dias=avisoDias()){
   config.gastos.forEach(x=>{ const v=Math.round(Number(x.vence)); if(!v || v<1 || !tocaEn(x,m)) return;
     const s=current.gastos[x.id]; if(!s || s.pagado) return;
     const dia=Math.min(v,n), diff=dia-hoy;
+    if(esDebAConfirmar(x,s,diff)) return;  // v2.8: lo pregunta el aviso de débitos
     if(diff<=dias) out.push({x, dia, diff, monto:eff(s.real,x.estimado)}); });
   return out.sort((a,b)=>a.diff-b.diff || b.monto-a.monto);
 }
 function venceTxt(o){
+  if(o.x?.debito===true && o.diff>=0) return o.diff===0 ? 'Se debita hoy' : o.diff===1 ? 'Se debita mañana' : `Se debita en ${o.diff} días`;
   if(o.diff<0) return `Vencido · día ${o.dia}`;
   if(o.diff===0) return 'Vence hoy';
   return o.diff===1 ? 'Vence mañana' : `Vence en ${o.diff} días`;
@@ -1085,7 +1136,7 @@ function provNota(t){
 function viewResumen(t){
   /* Checklist del mes (pedido de Gonzalo, 14/11/2026): se ven todos los gastos fijos y lo tildado queda tildado en su lugar. */
   const lista = gastosDelMes().sort((a,b)=>(Number(a.vence)||99)-(Number(b.vence)||99));
-  return `${vencAviso()}${respaldoAviso()}<div class="grid">
+  return `${debAviso()}${vencAviso()}${respaldoAviso()}<div class="grid">
     <div class="card"><div class="card-h"><h2>¿En qué se va la plata?</h2><span class="sub">${esc(current.mesLabel)}</span></div>${donut(t)}</div>
     <div class="card"><div class="card-h"><h2>Gastos del mes</h2><span class="sub">${t.nPag} de ${t.nFijos} pagados</span></div>
       ${lista.length? lista.map(gastoRow).join('') : `<div class="empty"><b>Sin gastos fijos</b>Agregalos desde «Gastos fijos».</div>`}
@@ -1106,10 +1157,11 @@ function estadoVence(x, dia, m, y){
   if(current.gastos[x.id]?.pagado) return 'ok';
   const now=new Date();
   if(m===now.getMonth() && y===now.getFullYear()){ const diff=dia-now.getDate();
+    if(esDebAConfirmar(x, current.gastos[x.id], diff)) return 'conf';
     if(diff<0) return 'vencido'; if(diff===0) return 'hoy'; if(diff<=avisoDias()) return 'pronto'; }
   return 'pend';
 }
-const ESTADO_TXT={ok:'pagado', vencido:'vencido', hoy:'vence hoy', pronto:'vence pronto', pend:'pendiente'};
+const ESTADO_TXT={conf:'débito a confirmar', ok:'pagado', vencido:'vencido', hoy:'vence hoy', pronto:'vence pronto', pend:'pendiente'};
 function vencimientosDelMes(){
   const [m,y]=mesCal(), n=diasDelMes(m,y), porDia={}, sinDia=[];
   config.gastos.forEach(x=>{ const v=Math.round(Number(x.vence)); if(!tocaEn(x,m)) return;
@@ -1422,7 +1474,7 @@ let sheetActual=null; // {form, close, vuelta}: la hoja abierta (Escape la cierr
 const closeSheet=()=>{ if(sheetActual) sheetActual.close(); else document.getElementById('sheet-root').innerHTML=''; };
 
 function sheetGasto(id){
-  const x = id ? config.gastos.find(g=>g.id===id) : {nombre:'',estimado:'',categoria:'otros',vence:'',nota:'',frecuencia:'mensual',mesPago:null};
+  const x = id ? config.gastos.find(g=>g.id===id) : {nombre:'',estimado:'',categoria:'otros',vence:'',nota:'',frecuencia:'mensual',mesPago:null,debito:false};
   const fr=frecDe(x), mp=mesPagoDe(x) ?? mesCal()[0];
   const s = id ? current.gastos[id] : {real:''};
   const actions=[];
@@ -1444,7 +1496,7 @@ function sheetGasto(id){
     const frecuencia=FRECS[fd.get('frecuencia')]?fd.get('frecuencia'):'mensual', mpv=Number(fd.get('mesPago'));
     if(frecuencia!=='mensual' && !(mpv>=0 && mpv<=11)) errores.mesPago='Elegí un mes en que se paga';
     if(!validarForm(form, errores, avisos)) return false;
-    const data={nombre, categoria:fd.get('categoria'), estimado:Number(est||0), vence, frecuencia, mesPago:frecuencia==='mensual'?null:mpv, nota:fd.get('nota').trim()};
+    const data={nombre, categoria:fd.get('categoria'), estimado:Number(est||0), vence, frecuencia, mesPago:frecuencia==='mensual'?null:mpv, debito:fd.get('debito')==='on', nota:fd.get('nota').trim()};
     if(id){ Object.assign(x,data); current.gastos[id].real=real; }
     else { const nid=uid(); config.gastos.push({id:nid,...data}); current.gastos[nid]={real,pagado:false}; }
     await saveAll(); render(); toast(id?'Cambios guardados':'Gasto agregado');
@@ -1458,6 +1510,7 @@ function sheetGasto(id){
     <p class="frec-hint" id="frec-hint" aria-live="polite"></p>
     <div class="field"><label id="lbl-est">Estimado mensual</label><input class="inp money" name="estimado" inputmode="decimal" value="${numStr(x.estimado)}" placeholder="$ 0"></div>
     <div class="field" id="f-real"><label>Real este mes</label><input class="inp money" name="real" inputmode="decimal" value="${numStr(s.real)}" placeholder="${numStr(x.estimado)||'$ 0'}"></div>
+    <label class="chk-line"><input type="checkbox" name="debito" ${x.debito===true?'checked':''}><span><b>Débito automático</b><span>Cuando pase el día de vencimiento, la app te pregunta si se debitó y, si confirmás, lo marca como pagado.</span></span></label>
     <div class="field full"><label>Nota</label><input class="inp" name="nota" value="${esc(x.nota)}" placeholder="Opcional"></div>
   </div>
   <div class="gcal" id="gcal"><a class="btn ghost btn-gcal" target="_blank" rel="noopener" hidden>${svg('cal')}<span>Agregar a Google Calendar</span></a><p></p></div>`});
@@ -1795,6 +1848,17 @@ document.addEventListener('click', async e=>{
     case 'anticipo': sheetAnticipo(); break;
     case 'ver-prov': ui.tab='fijos'; ui.vistaFijos='lista'; render(); { const c=document.getElementById('provision'); if(c) c.scrollIntoView({behavior:'smooth',block:'start'}); } break;
     case 'ver-cal': ui.tab='fijos'; ui.vistaFijos='cal'; ui.diaCal=null; render(); window.scrollTo({top:0,behavior:'smooth'}); break;
+    case 'deb-si': case 'deb-no': { const st=current.gastos[id], cur=current, x=config.gastos.find(g=>g.id===id); if(!st||!x) break;
+      const si=el.dataset.act==='deb-si';
+      if(si) st.pagado=true; else st.debNo=true;
+      await saveAll(); render();
+      toast(si ? `${x.nombre}: pagado` : `${x.nombre}: queda como vencido`, async ()=>{ if(current!==cur){ toast('El mes cambió: no se pudo deshacer'); return; }
+        if(si) st.pagado=false; else delete st.debNo; await saveAll(); render(); });
+      break; }
+    case 'deb-todos': { const l=debitosAConfirmar(), cur=current; if(!l.length) break;
+      const sts=l.map(o=>current.gastos[o.x.id]); sts.forEach(st=>{ st.pagado=true; }); await saveAll(); render();
+      toast(`${l.length} débitos marcados como pagados`, async ()=>{ if(current!==cur){ toast('El mes cambió: no se pudo deshacer'); return; } sts.forEach(st=>{ st.pagado=false; }); await saveAll(); render(); });
+      break; }
     case 'aviso-pagar': { const st=current.gastos[id], cur=current, x=config.gastos.find(g=>g.id===id); if(!st||!x) break;
       st.pagado=true; await saveAll(); render();
       toast(`${x.nombre}: pagado`, async ()=>{ if(current!==cur){ toast('El mes cambió: no se pudo deshacer'); return; } st.pagado=false; await saveAll(); render(); });

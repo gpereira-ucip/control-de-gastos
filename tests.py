@@ -67,6 +67,12 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     total, orden (primero lo que toca), fila aparte «Apartá $/mes», texto de la hoja (y con lo escrito), Resumen con
     total y ahorro parejo (t.ahorro + lo que toca − provisión), «Ver detalle» lleva a la tarjeta, totales y datos
     intactos, recarga; contraste AA; 390 claro y 1280 oscuro
+  - (v2.8) débito automático (esquema 3; fecha fija 15/11/2026): datos del esquema 2 migran sin débito (copia
+    pre-migración, totales iguales); casilla en la hoja que se guarda; un débito con el día pasado no figura como
+    vencido sino en «¿Se debitó?» (título, filas, total), con «Sí» (pagado + Deshacer), «No» (vuelve a vencido +
+    Deshacer) y «Se debitaron todos»; antes del día el aviso dice «Se debita mañana»; etiquetas en las filas;
+    calendario con estado «a confirmar»; otro mes sin pregunta; se recuerda al recargar; el mes nuevo arranca sin
+    «No se debitó»; contraste AA; 390 claro y 1280 oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -1105,7 +1111,7 @@ def notif(b):
     ctx, page, errs = new_page(b, 390, 844, seed=datos(meta={'notif': {'activo': True, 'ultimo': '2026-11-14'}}), fecha=F, init=NOTIF_MOCK % ('false', 'granted'))
     page.wait_for_timeout(300)
     check(len(notifs(page)) >= 1 and notifs(page)[-1]['t'] == 'Atrasado de prueba está vencido', 'activos: al abrir otro día avisa')
-    check(get(page, 'meta')['notif']['ultimo'] == '2026-11-15' and get(page, 'meta')['schemaVersion'] == 2, 'anota el día y conserva meta')
+    check(get(page, 'meta')['notif']['ultimo'] == '2026-11-15' and get(page, 'meta')['schemaVersion'] == page.evaluate('SCHEMA_VERSION'), 'anota el día y conserva meta')
     check(not errs, f'sin errores {errs}'); ctx.close()
     # Otro mes: no avisa
     ctx, page, errs = new_page(b, 390, 844, seed=datos('Octubre 2026', meta={'notif': {'activo': True, 'ultimo': None}}), fecha=F, init=NOTIF_MOCK % ('false', 'granted'))
@@ -1245,7 +1251,7 @@ def frecuencia(b):
         cfg = get(page, 'config')
         check(all(x['frecuencia'] == 'mensual' and x['mesPago'] is None for x in cfg['gastos']) and [x['id'] for x in cfg['gastos']] == ['ga', 'gb', 'gc']
               and all(cfg['gastos'][k]['estimado'] == gs[k]['estimado'] and cfg['gastos'][k]['vence'] == gs[k]['vence'] for k in range(3)), f'{label}: esquema 1 migra a mensual sin perder nada')
-        check(get(page, 'meta')['schemaVersion'] == 2 and get(page, 'pre-migracion-esquema-1') is not None, f'{label}: esquema 2 y copia pre-migración')
+        check(get(page, 'meta')['schemaVersion'] >= 2 and get(page, 'pre-migracion-esquema-1') is not None, f'{label}: esquema 2 (o más) y copia pre-migración')
         check(page.evaluate('totals().fijos') == 89000 and page.evaluate('totals().nFijos') == 3, f'{label}: totales iguales tras migrar')
         # Hoja: mensual oculta «Se paga en»
         editar(page, 'gb', 'mensual')
@@ -1371,6 +1377,89 @@ def provision(b):
         check(page.locator('[data-key=prov-res]').count() == 1, f'{label}: sigue al recargar')
         check(not errs, f'{label}: sin errores {errs}'); ctx.close()
 
+def debito(b):
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    def g(i, n, m, v, deb=None):
+        x = {'id': i, 'nombre': n, 'estimado': m, 'categoria': 'servicios', 'vence': v, 'nota': '', 'frecuencia': 'mensual', 'mesPago': None}
+        if deb is not None: x['debito'] = deb
+        return x
+    def seed(gs, sv, mes='Noviembre 2026'):
+        return {'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 900000, 'nota': ''}], 'gastos': gs},
+                'current': {'mesLabel': mes, 'gastos': {x['id']: {'real': '', 'pagado': False} for x in gs}, 'ingresos': {'i1': {'real': '', 'cobrado': False}}, 'movimientos': []},
+                'history': [], 'meta': {'schemaVersion': sv, 'appVersion': '2.7', 'vistoNovedades': ['2.8'], 'respaldo': {'ultimo': 1795000000000, 'base': 0, 'pospuesto': None}}}
+    F = '2026-11-15T10:00:00'
+    aviso = lambda page: page.evaluate("[...document.querySelectorAll('#aviso-vence .va-row')].map(e=>e.dataset.key.slice(3))")
+    deb = lambda page: page.evaluate("[...document.querySelectorAll('#aviso-debito .va-row')].map(e=>e.dataset.key.slice(3))")
+    st = lambda page, i: get(page, 'current')['gastos'][i]
+    print('\n== Débito automático (v2.8): migración y hoja')
+    gs2 = [g('ga', 'Luz de prueba', 20000, 10), g('gb', 'Agua de prueba', 9000, 20)]
+    ctx, page, errs = new_page(b, 390, 844, seed=seed(gs2, 2), fecha=F)
+    cfg = get(page, 'config')
+    check(get(page, 'meta')['schemaVersion'] == 3 and get(page, 'pre-migracion-esquema-2') is not None, 'esquema 3 y copia pre-migración')
+    check(all(x['debito'] is False for x in cfg['gastos']) and [x['estimado'] for x in cfg['gastos']] == [20000, 9000] and page.evaluate('totals().fijos') == 29000, 'migra sin débito y sin perder nada')
+    check(aviso(page) == ['ga'] and page.locator('#aviso-debito').count() == 0, 'sin débito: la Luz figura vencida')
+    page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+    page.click('.row-main[data-act=edit-gasto][data-id=ga]'); page.wait_for_selector('.sheet [name=debito]')
+    check(not page.is_checked('.sheet [name=debito]'), 'casilla destildada al abrir')
+    page.check('.sheet [name=debito]'); page.screenshot(path=str(SHOTS / 'deb-hoja-390-light.png'))
+    page.click('.sheet button[type=submit]'); page.wait_for_timeout(300)
+    check([x['debito'] for x in get(page, 'config')['gastos']] == [True, False], 'se guarda el débito')
+    r = page.inner_text('[data-key=g-ga]')
+    check('Débito aut.' in r and '¿Se debitó? · día 10' in r, f'etiquetas en la fila ({r!r})')
+    page.click('.nav [data-tab=resumen]'); page.wait_for_timeout(200)
+    check(deb(page) == ['ga'] and aviso(page) == [] and '¿Se debitó Luz de prueba?' in page.inner_text('#aviso-debito'), 'pasa al aviso «¿Se debitó?» y deja de figurar vencido')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    gs = [g('ga', 'Luz de prueba', 20000, 10, True), g('gb', 'Gas de prueba', 15000, 12, True), g('gc', 'Agua de prueba', 9000, 16, True), g('gd', 'Expensas de prueba', 50000, 5, False)]
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark')]:
+        label = f'débito {w} {theme}'
+        print(f'\n== Débito automático (v2.8) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=seed(gs, 3), fecha=F)
+        cfg0 = get(page, 'config')
+        check(deb(page) == ['ga', 'gb'] and aviso(page) == ['gd', 'gc'], f'{label}: a confirmar {deb(page)} y aviso {aviso(page)}')
+        t = page.inner_text('#aviso-debito').replace('\xa0', ' ')
+        check('¿Se debitaron 2 débitos automáticos?' in t and '$ 35.000' in t and 'Débito · día 10' in t and page.locator('[data-act=deb-todos]').count() == 1, f'{label}: título, total y filas')
+        check('Se debita mañana' in page.inner_text('#aviso-vence [data-key=va-gc]'), f'{label}: el próximo dice «Se debita mañana»')
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en Resumen {malos[:3]}')
+        no_hscroll(page, w, label)
+        page.screenshot(path=str(SHOTS / f'deb-resumen-{w}-{theme}.png'), full_page=True)
+        # Sí + Deshacer
+        page.click('[data-act=deb-si][data-id=ga]'); page.wait_for_timeout(300)
+        check(st(page, 'ga')['pagado'] is True and deb(page) == ['gb'] and '¿Se debitó Gas de prueba?' in page.inner_text('#aviso-debito'), f'{label}: «Sí» lo marca pagado')
+        page.click('#toast-undo'); page.wait_for_timeout(300)
+        check(st(page, 'ga')['pagado'] is False and deb(page) == ['ga', 'gb'], f'{label}: Deshacer del «Sí»')
+        # No + Deshacer
+        page.click('[data-act=deb-no][data-id=gb]'); page.wait_for_timeout(300)
+        check(st(page, 'gb').get('debNo') is True and deb(page) == ['ga'] and aviso(page) == ['gd', 'gb', 'gc'] and 'Vencido' in page.inner_text('#aviso-vence [data-key=va-gb]'), f'{label}: «No» lo vuelve vencido ({aviso(page)})')
+        page.click('#toast-undo'); page.wait_for_timeout(300)
+        check('debNo' not in st(page, 'gb') and deb(page) == ['ga', 'gb'], f'{label}: Deshacer del «No»')
+        # Calendario
+        page.click('.nav [data-tab=fijos]'); page.click('[data-act=vista][data-f=cal]'); page.wait_for_timeout(200)
+        check(page.locator('.cal-d[data-i="10"] .cal-dots i.conf').count() == 1 and page.locator('.cal-d[data-i="5"] .cal-dots i.vencido').count() == 1, f'{label}: calendario con «a confirmar»')
+        check('débito a confirmar' in (page.get_attribute('.cal-d[data-i="10"]', 'aria-label') or ''), f'{label}: nombre accesible del día')
+        page.click('[data-act=vista][data-f=lista]'); page.wait_for_timeout(150)
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en Gastos fijos {malos[:3]}')
+        page.click('.nav [data-tab=resumen]'); page.wait_for_timeout(200)
+        # Todos
+        page.click('[data-act=deb-todos]'); page.wait_for_timeout(300)
+        check(st(page, 'ga')['pagado'] and st(page, 'gb')['pagado'] and page.locator('#aviso-debito').count() == 0, f'{label}: «Se debitaron todos»')
+        page.reload(); page.wait_for_selector('.hero')
+        check(st(page, 'ga')['pagado'] and page.locator('#aviso-debito').count() == 0 and get(page, 'config') == cfg0, f'{label}: se recuerda al recargar y la configuración no cambia')
+        check(not errs, f'{label}: sin errores {errs}'); ctx.close()
+    print('\n== Débito automático: otro mes y mes nuevo')
+    ctx, page, errs = new_page(b, 390, 844, seed=seed(gs, 3, 'Octubre 2026'), fecha=F)
+    check(page.locator('#aviso-debito').count() == 0 and page.evaluate('debitosAConfirmar().length') == 0, 'otro mes: sin pregunta')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    s3 = seed(gs, 3); s3['current']['gastos']['gb']['debNo'] = True
+    ctx, page, errs = new_page(b, 390, 844, seed=s3, fecha=F)
+    check('gb' in aviso(page) and deb(page) == ['ga'], '«No se debitó» guardado se respeta')
+    page.click('#close-mobile'); page.wait_for_selector('.sheet'); page.click('.sheet button[type=submit]'); page.wait_for_timeout(300)
+    c = get(page, 'current')
+    check(c['mesLabel'] == 'Diciembre 2026' and all('debNo' not in v and v['pagado'] is False for v in c['gastos'].values()), 'el mes nuevo arranca sin «No se debitó»')
+    check(all(x['debito'] == (x['id'] != 'gd') for x in get(page, 'config')['gastos']), 'el débito sigue configurado en el mes nuevo')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -1404,6 +1493,7 @@ with sync_playwright() as pw:
     anticipo(b)
     frecuencia(b)
     provision(b)
+    debito(b)
     primera_vez(b)
     b.close()
 
