@@ -136,6 +136,13 @@ button{cursor:pointer}
 .amt{font-weight:800;font-size:15px;letter-spacing:-.01em}
 .amt.pos{color:var(--pos)}
 .amt-sub{font-size:11.5px;color:var(--muted);margin-top:2px}
+.check.off{border-style:dashed;cursor:default}
+.is-off .amt{color:var(--muted)}
+.fuera-h{display:flex;justify-content:space-between;gap:8px;margin:14px 4px 2px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.fuera-nota{font-size:12.5px;color:var(--muted);margin:10px 4px 0}
+.field[hidden]{display:none}
+.frec-hint{grid-column:1/-1;margin:-2px 2px 0;font-size:12.5px;color:var(--muted)}
+.frec-hint:empty{display:none}
 .amt-sub .up{color:var(--neg)}.amt-sub .down{color:var(--pos)}
 .chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:99px;
   background:color-mix(in srgb,var(--c) 14%,transparent);color:color-mix(in srgb,var(--c) var(--chip-mix,85%),var(--text))}
@@ -354,8 +361,14 @@ textarea.inp{min-height:150px;resize:vertical;font-family:ui-monospace,SFMono-Re
 
 <script>
 /* ---------- Versión y novedades ---------- */
-const VERSION = '2.5';
+const VERSION = '2.6';
 const CHANGELOG = [
+  {v:'2.6', fecha:'27 nov 2026', items:[
+    'Nuevo: cada gasto fijo tiene su frecuencia: mensual, bimestral, trimestral, semestral o anual.',
+    'Para los que no son mensuales elegís un mes en que se pagan y la app calcula el resto (por ejemplo, trimestral desde enero: enero, abril, julio y octubre).',
+    'Los meses en que no toca, ese gasto no suma en el resumen, no aparece en el calendario ni en los avisos, y en «Gastos fijos» se ve aparte con su próximo pago.',
+    'Tus gastos de siempre quedaron como mensuales: no cambió nada hasta que vos lo elijas.'
+  ]},
   {v:'2.5', fecha:'26 nov 2026', items:[
     'Nuevo: elegís con cuánta anticipación te avisa la app de un vencimiento: 1, 3, 5 o 7 días antes. Antes eran siempre 3.',
     'Se cambia desde Opciones › «Anticipación del aviso», desde el aviso de vencimientos del Resumen o desde «Avisos del navegador». La hoja te muestra qué verías hoy con cada opción.',
@@ -515,6 +528,19 @@ function guessCat(n){ n=(n||'').toLowerCase();
   if(/expensa|alquiler|depto|departamento|hogar/.test(n)) return 'hogar';
   if(/prepaga|obra social|farmacia|m[eé]dic/.test(n)) return 'salud';
   return 'otros'; }
+/* Frecuencia de cada gasto fijo (v2.6, esquema 2): x.frecuencia ∈ FRECS (por defecto 'mensual') y x.mesPago = un mes
+   (0–11) en que se paga; los demás salen cada n meses desde ahí. Mensual: mesPago null. Un gasto que no toca en el
+   mes de mesCal() no suma, no va al calendario/aviso/.ics y se lista aparte. */
+const FRECS = {mensual:{label:'Mensual',n:1}, bimestral:{label:'Bimestral',n:2}, trimestral:{label:'Trimestral',n:3}, semestral:{label:'Semestral',n:6}, anual:{label:'Anual',n:12}};
+const frecDe = x => FRECS[x?.frecuencia] ? x.frecuencia : 'mensual';
+const mesPagoDe = x => { const v=x?.mesPago; if(v==null || v==='') return null; const n=Math.round(Number(v)); return n>=0 && n<=11 ? n : null; };
+function tocaEn(x, m){ const n=FRECS[frecDe(x)].n, mp=mesPagoDe(x); if(n===1 || mp==null) return true; return ((m-mp)%n+n)%n===0; }
+const tocaEsteMes = x => tocaEn(x, mesCal()[0]);
+const gastosDelMes = () => config.gastos.filter(tocaEsteMes);
+const gastosFuera = () => config.gastos.filter(x=>!tocaEsteMes(x));
+function proximoPago(x, m, y){ for(let k=0;k<12;k++){ const mm=(m+k)%12, yy=y+Math.floor((m+k)/12); if(tocaEn(x,mm)) return [mm,yy]; } return [m,y]; }
+const yLista = a => a.length<2 ? a.join('') : a.slice(0,-1).join(', ')+' y '+a[a.length-1];
+const mesesPagoTxt = x => yLista(MESES.map((n,i)=>i).filter(i=>tocaEn(x,i)).map(i=>MESES[i].toLowerCase()));
 const catOptions = sel => Object.entries(CATS).map(([k,v])=>`<option value="${k}" ${k===sel?'selected':''}>${v.label}</option>`).join('');
 
 /* ---------- Datos por defecto ---------- */
@@ -665,7 +691,7 @@ function respaldoAviso(){
    schemaVersion 0 = datos de la v1.0 (sin número de esquema).
    Para cambiar la estructura: subir SCHEMA_VERSION y agregar MIGRATIONS[n](d) que
    reciba {config,current,history} del esquema n-1 y devuelva el del esquema n. */
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MIGRATIONS = {
   1(d){
     const c=d.config||{}; c.ingresos=Array.isArray(c.ingresos)?c.ingresos:[]; c.gastos=Array.isArray(c.gastos)?c.gastos:[];
@@ -676,6 +702,10 @@ const MIGRATIONS = {
     cur.movimientos.forEach(m=>{ if(!m.id) m.id=uid(); if(!m.categoria) m.categoria='otros'; if(!m.fecha) m.fecha=todayISO(); if(m.ts==null) m.ts=0; });
     const h=(Array.isArray(d.history)?d.history:[]).map(x=>({...x, ingresos:Number(x.ingresos)||0, gastos:Number(x.gastos)||0, ahorro:Number(x.ahorro)||0}));
     return {config:c, current:cur, history:h};
+  },
+  2(d){ // v2.6: frecuencia de cada gasto fijo; todo lo que había queda mensual
+    const c=d.config||{}; (Array.isArray(c.gastos)?c.gastos:[]).forEach(x=>{ if(!FRECS[x.frecuencia]) x.frecuencia='mensual'; if(x.mesPago===undefined) x.mesPago=null; });
+    return {...d, config:c};
   }
 };
 function migrateData(d, from){
@@ -686,7 +716,7 @@ function migrateData(d, from){
 
 function normalize(){
   config.ingresos ||= []; config.gastos ||= [];
-  config.gastos.forEach(x=>{ x.categoria ||= guessCat(x.nombre); if(x.vence==null) x.vence=''; });
+  config.gastos.forEach(x=>{ x.categoria ||= guessCat(x.nombre); if(x.vence==null) x.vence=''; if(!FRECS[x.frecuencia]) x.frecuencia='mensual'; if(x.mesPago===undefined) x.mesPago=null; });
   current.gastos ||= {}; current.ingresos ||= {}; current.movimientos ||= [];
   config.gastos.forEach(x=>{ current.gastos[x.id] ||= {real:'',pagado:false}; });
   config.ingresos.forEach(x=>{ current.ingresos[x.id] ||= {real:'',cobrado:false}; });
@@ -734,12 +764,13 @@ function totals(){
   let ingresos=0, cobrado=0, fijos=0, pagado=0, nPag=0;
   config.ingresos.forEach(x=>{ const s=current.ingresos[x.id]; const v=eff(s.real,x.estimado); ingresos+=v; if(s.cobrado) cobrado+=v; });
   const porCat={};
-  config.gastos.forEach(x=>{ const s=current.gastos[x.id]; const v=eff(s.real,x.estimado); fijos+=v;
+  const delMes=gastosDelMes();
+  delMes.forEach(x=>{ const s=current.gastos[x.id]; const v=eff(s.real,x.estimado); fijos+=v;
     if(s.pagado){pagado+=v;nPag++;} porCat[x.categoria]=(porCat[x.categoria]||0)+v; });
   let variables=0;
   current.movimientos.forEach(m=>{ variables+=Number(m.monto)||0; porCat[m.categoria]=(porCat[m.categoria]||0)+(Number(m.monto)||0); });
   const gastos=fijos+variables, ahorro=ingresos-gastos;
-  return {ingresos,cobrado,fijos,pagado,nPag,nFijos:config.gastos.length,variables,gastos,ahorro,
+  return {ingresos,cobrado,fijos,pagado,nPag,nFijos:delMes.length,nFuera:config.gastos.length-delMes.length,variables,gastos,ahorro,
     tasa: ingresos? ahorro/ingresos : 0, porCat};
 }
 function parseMes(label){
@@ -824,9 +855,21 @@ function gastoRow(x){
     <button class="check" data-act="toggle-gasto" data-id="${x.id}" aria-pressed="${!!s.pagado}" aria-label="${esc(x.nombre)}: pagado">${svg('check')}</button>
     <div class="row-main" data-act="edit-gasto" data-id="${x.id}" role="button" tabindex="0" aria-label="Editar ${esc(x.nombre)}, ${money(v)}${s.pagado?', pagado':''}">
       <div class="row-title">${esc(x.nombre)}</div>
-      <div class="row-meta">${chip(x.categoria)}${venceTag(x,s)}${x.nota?`<span>${esc(x.nota)}</span>`:''}</div>
+      <div class="row-meta">${chip(x.categoria)}${venceTag(x,s)}${frecDe(x)!=='mensual'?`<span class="tag">${FRECS[frecDe(x)].label}</span>`:''}${x.nota?`<span>${esc(x.nota)}</span>`:''}</div>
     </div>
     <div class="row-amt" data-act="edit-gasto" data-id="${x.id}" aria-hidden="true"><div class="amt">${money(v)}</div><div class="amt-sub">${sub}</div></div>
+  </div>`;
+}
+/* Gasto que no se paga en el mes en curso (v2.6): sin tilde, con su frecuencia y el próximo mes de pago. */
+function gastoFueraRow(x){
+  const [m,y]=mesCal(), [pm,py]=proximoPago(x,m,y), prox=MESES[pm].toLowerCase()+(py!==y?' '+py:''), fl=FRECS[frecDe(x)].label;
+  return `<div class="row is-off" data-key="g-${x.id}">
+    <span class="check off" aria-hidden="true"></span>
+    <div class="row-main" data-act="edit-gasto" data-id="${x.id}" role="button" tabindex="0" aria-label="Editar ${esc(x.nombre)}, ${fl.toLowerCase()}, ${money(x.estimado)}; no se paga este mes, el próximo pago es en ${esc(prox)}">
+      <div class="row-title">${esc(x.nombre)}</div>
+      <div class="row-meta">${chip(x.categoria)}<span class="tag">${fl}</span><span>Próximo: ${esc(prox)}</span></div>
+    </div>
+    <div class="row-amt" data-act="edit-gasto" data-id="${x.id}" aria-hidden="true"><div class="amt">${money(x.estimado)}</div><div class="amt-sub">Este mes no</div></div>
   </div>`;
 }
 function ingresoRow(x){
@@ -864,7 +907,7 @@ function vencimientosAviso(dias=avisoDias()){
   const [m,y]=parseMes(current.mesLabel), now=new Date();
   if(m!==now.getMonth() || y!==now.getFullYear()) return [];
   const n=diasDelMes(m,y), hoy=now.getDate(), out=[];
-  config.gastos.forEach(x=>{ const v=Math.round(Number(x.vence)); if(!v || v<1) return;
+  config.gastos.forEach(x=>{ const v=Math.round(Number(x.vence)); if(!v || v<1 || !tocaEn(x,m)) return;
     const s=current.gastos[x.id]; if(!s || s.pagado) return;
     const dia=Math.min(v,n), diff=dia-hoy;
     if(diff<=dias) out.push({x, dia, diff, monto:eff(s.real,x.estimado)}); });
@@ -1006,12 +1049,13 @@ function sheetAnticipo(){
 }
 function viewResumen(t){
   /* Checklist del mes (pedido de Gonzalo, 14/11/2026): se ven todos los gastos fijos y lo tildado queda tildado en su lugar. */
-  const lista = [...config.gastos].sort((a,b)=>(Number(a.vence)||99)-(Number(b.vence)||99));
+  const lista = gastosDelMes().sort((a,b)=>(Number(a.vence)||99)-(Number(b.vence)||99));
   return `${vencAviso()}${respaldoAviso()}<div class="grid">
     <div class="card"><div class="card-h"><h2>¿En qué se va la plata?</h2><span class="sub">${esc(current.mesLabel)}</span></div>${donut(t)}</div>
     <div class="card"><div class="card-h"><h2>Gastos del mes</h2><span class="sub">${t.nPag} de ${t.nFijos} pagados</span></div>
       ${lista.length? lista.map(gastoRow).join('') : `<div class="empty"><b>Sin gastos fijos</b>Agregalos desde «Gastos fijos».</div>`}
-      ${lista.length && t.nPag===t.nFijos? `<div class="empty"><b>¡Todo pagado!</b>No quedan gastos fijos pendientes este mes.</div>` : ''}</div>
+      ${lista.length && t.nPag===t.nFijos? `<div class="empty"><b>¡Todo pagado!</b>No quedan gastos fijos pendientes este mes.</div>` : ''}
+      ${t.nFuera? `<p class="fuera-nota">${t.nFuera===1?'1 gasto no se paga este mes por su frecuencia. Lo ves':`${t.nFuera} gastos no se pagan este mes por su frecuencia. Los ves`} en «Gastos fijos».</p>` : ''}</div>
   </div>
   <div class="card" style="margin-top:16px"><div class="card-h"><h2>Ingresos</h2><span class="sub">Cobrado ${money(t.cobrado)} de ${money(t.ingresos)}</span></div>
     ${config.ingresos.map(ingresoRow).join('')}
@@ -1032,7 +1076,7 @@ function estadoVence(x, dia, m, y){
 const ESTADO_TXT={ok:'pagado', vencido:'vencido', hoy:'vence hoy', pronto:'vence pronto', pend:'pendiente'};
 function vencimientosDelMes(){
   const [m,y]=mesCal(), n=diasDelMes(m,y), porDia={}, sinDia=[];
-  config.gastos.forEach(x=>{ const v=Math.round(Number(x.vence));
+  config.gastos.forEach(x=>{ const v=Math.round(Number(x.vence)); if(!tocaEn(x,m)) return;
     if(!v || v<1){ sinDia.push(x); return; } (porDia[Math.min(v,n)] ||= []).push(x); });
   return {m,y,n,porDia,sinDia};
 }
@@ -1075,7 +1119,7 @@ function viewFijos(t){
   return barra + viewFijosLista(t);
 }
 function viewFijosLista(t){
-  let items=config.gastos;
+  let items=gastosDelMes(); const fuera=ui.filtro==='todos'?gastosFuera():[];
   if(ui.filtro==='pend') items=items.filter(x=>!current.gastos[x.id].pagado);
   if(ui.filtro==='pag') items=items.filter(x=>current.gastos[x.id].pagado);
   const f=(k,l)=>`<button class="${ui.filtro===k?'on':''}" data-act="filtro" data-f="${k}" aria-pressed="${ui.filtro===k}">${l}</button>`;
@@ -1083,6 +1127,7 @@ function viewFijosLista(t){
     <div class="card-h"><div><h2>Gastos fijos</h2><div class="sub">${t.nPag} de ${t.nFijos} pagados · total ${money(t.fijos)}</div></div>
       <div class="seg" role="group" aria-label="Filtrar gastos">${f('todos','Todos')}${f('pend','Pendientes')}${f('pag','Pagados')}</div></div>
     ${items.length? items.map(gastoRow).join('') : `<div class="empty">Nada para mostrar con este filtro.</div>`}
+    ${fuera.length? `<div class="fuera-h" data-key="fuera-h"><span>No se pagan en ${esc(MESES[mesCal()[0]].toLowerCase())}</span><span>${fuera.length}</span></div>${fuera.map(gastoFueraRow).join('')}` : ''}
     <button class="add-row" data-act="add-gasto">+ Agregar gasto fijo</button>
   </div>`;
 }
@@ -1326,7 +1371,8 @@ let sheetActual=null; // {form, close, vuelta}: la hoja abierta (Escape la cierr
 const closeSheet=()=>{ if(sheetActual) sheetActual.close(); else document.getElementById('sheet-root').innerHTML=''; };
 
 function sheetGasto(id){
-  const x = id ? config.gastos.find(g=>g.id===id) : {nombre:'',estimado:'',categoria:'otros',vence:'',nota:''};
+  const x = id ? config.gastos.find(g=>g.id===id) : {nombre:'',estimado:'',categoria:'otros',vence:'',nota:'',frecuencia:'mensual',mesPago:null};
+  const fr=frecDe(x), mp=mesPagoDe(x) ?? mesCal()[0];
   const s = id ? current.gastos[id] : {real:''};
   const actions=[];
   if(id) actions.push({label:'Eliminar',cls:'danger',fn:async()=>{
@@ -1344,8 +1390,10 @@ function sheetGasto(id){
     if(vt){ if(!/^\d{1,2}$/.test(vt) || +vt<1 || +vt>31) errores.vence='Elegí un día entre 1 y 31'; else vence=+vt; }
     const est=montoCampo(fd,'estimado',errores), real=montoCampo(fd,'real',errores);
     if(est!=='' && real!=='' && est>0 && real>est*10) avisos.real=`Es más de 10 veces el estimado (${money(est)}). ¿Está bien?`;
+    const frecuencia=FRECS[fd.get('frecuencia')]?fd.get('frecuencia'):'mensual', mpv=Number(fd.get('mesPago'));
+    if(frecuencia!=='mensual' && !(mpv>=0 && mpv<=11)) errores.mesPago='Elegí un mes en que se paga';
     if(!validarForm(form, errores, avisos)) return false;
-    const data={nombre, categoria:fd.get('categoria'), estimado:Number(est||0), vence, nota:fd.get('nota').trim()};
+    const data={nombre, categoria:fd.get('categoria'), estimado:Number(est||0), vence, frecuencia, mesPago:frecuencia==='mensual'?null:mpv, nota:fd.get('nota').trim()};
     if(id){ Object.assign(x,data); current.gastos[id].real=real; }
     else { const nid=uid(); config.gastos.push({id:nid,...data}); current.gastos[nid]={real,pagado:false}; }
     await saveAll(); render(); toast(id?'Cambios guardados':'Gasto agregado');
@@ -1354,13 +1402,34 @@ function sheetGasto(id){
     <div class="field full"><label>Nombre</label><input class="inp" name="nombre" value="${esc(x.nombre)}" placeholder="Ej: Prepaga" maxlength="60" autocomplete="off"></div>
     <div class="field"><label>Categoría</label><select class="inp" name="categoria">${catOptions(x.categoria)}</select></div>
     <div class="field"><label>Vence el día</label><input class="inp" name="vence" inputmode="numeric" value="${esc(x.vence)}" placeholder="1–31"></div>
-    <div class="field"><label>Estimado mensual</label><input class="inp money" name="estimado" inputmode="decimal" value="${numStr(x.estimado)}" placeholder="$ 0"></div>
-    <div class="field"><label>Real este mes</label><input class="inp money" name="real" inputmode="decimal" value="${numStr(s.real)}" placeholder="${numStr(x.estimado)||'$ 0'}"></div>
+    <div class="field"><label>Frecuencia</label><select class="inp" name="frecuencia">${Object.entries(FRECS).map(([k,v])=>`<option value="${k}" ${k===fr?'selected':''}>${v.label}</option>`).join('')}</select></div>
+    <div class="field" id="f-mespago" ${fr==='mensual'?'hidden':''}><label>Se paga en</label><select class="inp" name="mesPago">${MESES.map((n,i)=>`<option value="${i}" ${i===mp?'selected':''}>${n}</option>`).join('')}</select></div>
+    <p class="frec-hint" id="frec-hint" aria-live="polite"></p>
+    <div class="field"><label id="lbl-est">Estimado mensual</label><input class="inp money" name="estimado" inputmode="decimal" value="${numStr(x.estimado)}" placeholder="$ 0"></div>
+    <div class="field" id="f-real"><label>Real este mes</label><input class="inp money" name="real" inputmode="decimal" value="${numStr(s.real)}" placeholder="${numStr(x.estimado)||'$ 0'}"></div>
     <div class="field full"><label>Nota</label><input class="inp" name="nota" value="${esc(x.nota)}" placeholder="Opcional"></div>
   </div>
   <div class="gcal" id="gcal"><a class="btn ghost btn-gcal" target="_blank" rel="noopener" hidden>${svg('cal')}<span>Agregar a Google Calendar</span></a><p></p></div>`});
   const f=sheetActual?.form;
-  if(f){ gcalBloque(f,id); f.addEventListener('input',()=>gcalBloque(f,id)); f.addEventListener('change',()=>gcalBloque(f,id)); }
+  if(f){ const upd=()=>{ frecBloque(f); gcalBloque(f,id); }; upd(); f.addEventListener('input',upd); f.addEventListener('change',upd); }
+}
+/* Frecuencia en la hoja del gasto (v2.6): muestra «Se paga en» si no es mensual, explica los meses y el próximo pago,
+   y oculta «Real este mes» si este mes no toca. */
+function frecDesdeForm(form){
+  const fr=form.querySelector('[name=frecuencia]')?.value||'mensual';
+  return {frecuencia:FRECS[fr]?fr:'mensual', mesPago:fr==='mensual'?null:Number(form.querySelector('[name=mesPago]')?.value)};
+}
+function frecBloque(form){
+  const g=frecDesdeForm(form), mens=g.frecuencia==='mensual', [m,y]=mesCal(), toca=tocaEn(g,m);
+  const fm=form.querySelector('#f-mespago'), hint=form.querySelector('#frec-hint'), lbl=form.querySelector('#lbl-est'), real=form.querySelector('#f-real');
+  if(fm) fm.hidden=mens;
+  if(lbl) lbl.textContent = mens ? 'Estimado mensual' : 'Estimado por pago';
+  if(real) real.hidden=!toca;
+  if(!hint) return;
+  if(mens){ hint.textContent=''; return; }
+  const [pm,py]=proximoPago(g,m,y);
+  hint.textContent = (g.frecuencia==='anual' ? `Se paga una vez por año, en ${MESES[g.mesPago].toLowerCase()}.` : `Se paga en ${mesesPagoTxt(g)}.`)
+    + (toca ? ` Este mes (${MESES[m].toLowerCase()}) toca.` : ` En ${MESES[m].toLowerCase()} no toca: el próximo pago es en ${MESES[pm].toLowerCase()} ${py}.`);
 }
 function sheetIngreso(id){
   const x = id ? config.ingresos.find(g=>g.id===id) : {nombre:'',estimado:'',nota:''};
@@ -1421,8 +1490,8 @@ function sheetRename(){
    (dates=AAAAMMDD/AAAAMMDD+1) en el mes de mesCal(), día topado al último del mes. Usa los valores
    escritos en la hoja (aunque no estén guardados). Sin cambio de esquema. */
 const GCAL_BASE='https://calendar.google.com/calendar/render';
-function gcalURL({nombre, dia, monto, estimado=false, categoria='otros', nota='', pagado=false}){
-  const [m,y]=mesCal(), d=Math.round(Number(dia));
+function gcalURL({nombre, dia, monto, estimado=false, categoria='otros', nota='', pagado=false, mes=null}){
+  const [m,y]=mes||mesCal(), d=Math.round(Number(dia));
   if(!(d>=1)) return '';
   const dd=Math.min(d, diasDelMes(m,y)), p2=n=>String(n).padStart(2,'0');
   const f=x=>{ const t=new Date(y,m,x); return `${t.getFullYear()}${p2(t.getMonth()+1)}${p2(t.getDate())}`; };
@@ -1436,11 +1505,12 @@ function gcalDesdeForm(form, id){
   const vt=g('vence'), dia=/^\d{1,2}$/.test(vt)&&+vt>=1&&+vt<=31 ? +vt : 0;
   const real=leerMonto(g('real')), est=leerMonto(g('estimado'));
   const r=(!real.error && real.n!=='') ? real.n : null, e=(!est.error && est.n!=='') ? est.n : 0;
-  return {dia, url: dia ? gcalURL({nombre:g('nombre'), dia, monto:r??e, estimado:r==null, categoria:g('categoria'), nota:g('nota'), pagado:!!(id&&current.gastos[id]?.pagado)}) : ''};
+  const [cm,cy]=mesCal(), fq=frecDesdeForm(form), toca=tocaEn(fq,cm), mes=proximoPago(fq,cm,cy);  // v2.6: si este mes no toca, el próximo pago
+  return {dia, mes, url: dia ? gcalURL({nombre:g('nombre'), dia, monto:toca?(r??e):e, estimado:!toca||r==null, categoria:g('categoria'), nota:g('nota'), pagado:toca&&!!(id&&current.gastos[id]?.pagado), mes}) : ''};
 }
 function gcalBloque(form, id){
   const box=form.querySelector('#gcal'); if(!box) return;
-  const {dia,url}=gcalDesdeForm(form,id), [m,y]=mesCal(), a=box.querySelector('a'), p=box.querySelector('p');
+  const {dia,url,mes}=gcalDesdeForm(form,id), [m,y]=mes, a=box.querySelector('a'), p=box.querySelector('p');
   if(url){ a.href=url; a.hidden=false; const dd=Math.min(dia,diasDelMes(m,y));
     p.textContent=`Abre Google Calendar con el vencimiento del ${dd} de ${MESES[m].toLowerCase()} ${y} listo para guardar.`; }
   else { a.removeAttribute('href'); a.hidden=true; p.textContent='Poné el día de vencimiento para poder agregarlo a Google Calendar.'; }
@@ -1539,7 +1609,7 @@ const MENU = {
     const q=v=>`"${String(v??'').replace(/"/g,'""')}"`;
     const rows=[['Tipo','Ítem','Categoría','Fecha','Estimado','Real','Estado']];
     config.ingresos.forEach(x=>{const s=current.ingresos[x.id]; rows.push(['Ingreso',x.nombre,'','',x.estimado,s.real,s.cobrado?'Cobrado':'Pendiente']);});
-    config.gastos.forEach(x=>{const s=current.gastos[x.id]; rows.push(['Gasto fijo',x.nombre,cat(x.categoria).label,x.vence?`día ${x.vence}`:'',x.estimado,s.real,s.pagado?'Pagado':'Pendiente']);});
+    gastosDelMes().forEach(x=>{const s=current.gastos[x.id]; rows.push(['Gasto fijo',x.nombre,cat(x.categoria).label,x.vence?`día ${x.vence}`:'',x.estimado,s.real,s.pagado?'Pagado':'Pendiente']);});
     current.movimientos.forEach(m=>rows.push(['Gasto variable',m.desc,cat(m.categoria).label,m.fecha,'',m.monto,'']));
     download(`${current.mesLabel.replace(/\s+/g,'-')}.csv`, '﻿'+rows.map(r=>r.map(q).join(';')).join('\n'),'text/csv');
     toast('CSV descargado (abre en Excel)');

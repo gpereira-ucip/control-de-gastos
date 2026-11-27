@@ -56,6 +56,12 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     «Guardar» deja meta.aviso y cambia el aviso, el estado «pronto» del calendario, el texto de las notificaciones
     y lo que notifica; «Cancelar» no cambia nada; se recuerda al recargar; meta sin la preferencia o con un valor
     inválido usa 3; otro mes lo explica; datos sin cambios; contraste AA; 390/1280 claro/oscuro
+  - (v2.6) frecuencia de cada gasto (esquema 2; fecha fija): datos del esquema 1 migran a «mensual» sin perder nada
+    (copia pre-migración, totales iguales); hoja con Frecuencia y «Se paga en» (oculto si es mensual), texto con los
+    meses y el próximo pago, «Estimado por pago», sin «Real este mes» si no toca; un trimestral que no toca no suma,
+    no está en el Resumen, el calendario ni el aviso, y se ve aparte en Gastos fijos con «Próximo: enero 2027»; uno
+    bimestral que toca lleva su etiqueta y avisa; Google Calendar apunta al próximo pago; se recuerda al recargar;
+    al cerrar el mes cambia lo que toca; respaldo del esquema 1 restaurado migra; contraste AA; 390/1280 claro/oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -1094,7 +1100,7 @@ def notif(b):
     ctx, page, errs = new_page(b, 390, 844, seed=datos(meta={'notif': {'activo': True, 'ultimo': '2026-11-14'}}), fecha=F, init=NOTIF_MOCK % ('false', 'granted'))
     page.wait_for_timeout(300)
     check(len(notifs(page)) >= 1 and notifs(page)[-1]['t'] == 'Atrasado de prueba está vencido', 'activos: al abrir otro día avisa')
-    check(get(page, 'meta')['notif']['ultimo'] == '2026-11-15' and get(page, 'meta')['schemaVersion'] == 1, 'anota el día y conserva meta')
+    check(get(page, 'meta')['notif']['ultimo'] == '2026-11-15' and get(page, 'meta')['schemaVersion'] == 2, 'anota el día y conserva meta')
     check(not errs, f'sin errores {errs}'); ctx.close()
     # Otro mes: no avisa
     ctx, page, errs = new_page(b, 390, 844, seed=datos('Octubre 2026', meta={'notif': {'activo': True, 'ultimo': None}}), fecha=F, init=NOTIF_MOCK % ('false', 'granted'))
@@ -1212,6 +1218,90 @@ def anticipo(b):
     check('solo en el mes en curso' in page.inner_text('#ant-prev'), 'otro mes: la vista previa explica que el aviso es del mes en curso')
     check(not errs, f'sin errores {errs}'); ctx.close()
 
+def frecuencia(b):
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    g = lambda i, n, m, v: {'id': i, 'nombre': n, 'estimado': m, 'categoria': 'servicios', 'vence': v, 'nota': ''}
+    gs = [g('ga', 'Luz de prueba', 20000, 20), g('gb', 'Seguro de prueba', 60000, 17), g('gc', 'Agua de prueba', 9000, 16)]
+    seed = {'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 900000, 'nota': ''}], 'gastos': gs},
+            'current': {'mesLabel': 'Noviembre 2026', 'gastos': {x['id']: {'real': '', 'pagado': False} for x in gs}, 'ingresos': {'i1': {'real': '', 'cobrado': False}}, 'movimientos': []},
+            'history': [], 'meta': {'schemaVersion': 1, 'appVersion': '2.5', 'vistoNovedades': ['2.5'], 'respaldo': {'ultimo': 1795000000000, 'base': 0, 'pospuesto': None}}}
+    F = '2026-11-15T10:00:00'
+    aviso = lambda page: page.evaluate("[...document.querySelectorAll('#aviso-vence .va-row')].map(e=>e.dataset.key.slice(3))")
+    def editar(page, id, frec, mes=None):
+        page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+        page.click(f'.row-main[data-act=edit-gasto][data-id={id}]'); page.wait_for_selector('.sheet [name=frecuencia]')
+        page.select_option('.sheet [name=frecuencia]', frec)
+        if mes is not None: page.select_option('.sheet [name=mesPago]', str(mes))
+        page.wait_for_timeout(150)
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark')]:
+        label = f'frecuencia {w} {theme}'
+        print(f'\n== Frecuencia de cada gasto (v2.6) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=seed, fecha=F)
+        cfg = get(page, 'config')
+        check(all(x['frecuencia'] == 'mensual' and x['mesPago'] is None for x in cfg['gastos']) and [x['id'] for x in cfg['gastos']] == ['ga', 'gb', 'gc']
+              and all(cfg['gastos'][k]['estimado'] == gs[k]['estimado'] and cfg['gastos'][k]['vence'] == gs[k]['vence'] for k in range(3)), f'{label}: esquema 1 migra a mensual sin perder nada')
+        check(get(page, 'meta')['schemaVersion'] == 2 and get(page, 'pre-migracion-esquema-1') is not None, f'{label}: esquema 2 y copia pre-migración')
+        check(page.evaluate('totals().fijos') == 89000 and page.evaluate('totals().nFijos') == 3, f'{label}: totales iguales tras migrar')
+        # Hoja: mensual oculta «Se paga en»
+        editar(page, 'gb', 'mensual')
+        check(page.locator('#f-mespago').is_hidden() and page.inner_text('#lbl-est') == 'Estimado mensual', f'{label}: mensual sin «Se paga en»')
+        page.select_option('.sheet [name=frecuencia]', 'trimestral'); page.select_option('.sheet [name=mesPago]', '0'); page.wait_for_timeout(150)
+        hint = page.inner_text('#frec-hint')
+        check(page.locator('#f-mespago').is_visible() and 'enero, abril, julio y octubre' in hint and 'enero 2027' in hint, f'{label}: el texto explica meses y próximo pago ({hint!r})')
+        check(page.inner_text('#lbl-est') == 'Estimado por pago' and page.locator('#f-real').is_hidden(), f'{label}: «Estimado por pago» y sin «Real este mes» si no toca')
+        u = page.get_attribute('.sheet .btn-gcal', 'href') or ''
+        check('dates=20270117%2F20270118' in u, f'{label}: Google Calendar apunta al próximo pago (enero)')
+        page.screenshot(path=str(SHOTS / f'frec-hoja-{w}-{theme}.png'))
+        page.click('.sheet button[type=submit]'); page.wait_for_timeout(300)
+        x = [x for x in get(page, 'config')['gastos'] if x['id'] == 'gb'][0]
+        check(x['frecuencia'] == 'trimestral' and x['mesPago'] == 0, f'{label}: se guarda frecuencia y mes ({x})')
+        # Lista: aparte, con próximo
+        fuera = page.locator('.row.is-off[data-key=g-gb]')
+        check(fuera.count() == 1 and 'Próximo: enero 2027' in fuera.inner_text() and 'Trimestral' in fuera.inner_text() and fuera.locator('button.check').count() == 0, f'{label}: en Gastos fijos se ve aparte, sin tilde y con el próximo pago')
+        check('no se pagan en noviembre' in page.inner_text('.fuera-h').lower(), f'{label}: título de la sección aparte')
+        check(page.evaluate('totals().fijos') == 29000 and page.evaluate('totals().nFijos') == 2, f'{label}: no suma este mes')
+        # bimestral que toca (septiembre → noviembre)
+        editar(page, 'gc', 'bimestral', 8)
+        check('Este mes (noviembre) toca' in page.inner_text('#frec-hint') and page.locator('#f-real').is_visible(), f'{label}: bimestral desde septiembre toca en noviembre')
+        page.click('.sheet button[type=submit]'); page.wait_for_timeout(300)
+        check('Bimestral' in page.inner_text('[data-key=g-gc]') and page.locator('.row.is-off[data-key=g-gc]').count() == 0, f'{label}: el que toca lleva la etiqueta y se tilda normal')
+        page.screenshot(path=str(SHOTS / f'frec-lista-{w}-{theme}.png'), full_page=True)
+        no_hscroll(page, w, label)
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en Gastos fijos {malos[:3]}')
+        # Calendario sin el trimestral
+        page.click('[data-act=vista][data-f=cal]'); page.wait_for_timeout(200)
+        check(page.locator('.cal-d[data-i="17"] .cal-dots i').count() == 0 and page.locator('.cal-d[data-i="16"] .cal-dots i').count() == 1, f'{label}: el calendario no muestra lo que no toca')
+        page.click('[data-act=vista][data-f=lista]')
+        # Resumen
+        page.click('.nav [data-tab=resumen]'); page.wait_for_timeout(200)
+        check(page.locator('.grid [data-key=g-gb]').count() == 0 and '1 gasto no se paga este mes' in page.inner_text('.fuera-nota'), f'{label}: Resumen sin el trimestral y con la nota')
+        check(aviso(page) == ['gc'], f'{label}: el aviso no incluye lo que no toca (el 17) y sí el bimestral del 16 ({aviso(page)})')
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en Resumen {malos[:3]}')
+        page.screenshot(path=str(SHOTS / f'frec-resumen-{w}-{theme}.png'), full_page=True)
+        # Recargar
+        page.reload(); page.wait_for_selector('.hero')
+        check(page.evaluate('totals().fijos') == 29000 and page.locator('.grid [data-key=g-gb]').count() == 0, f'{label}: se recuerda al recargar')
+        check(not errs, f'{label}: sin errores {errs}'); ctx.close()
+    # Diciembre: no tocan el trimestral (ene/abr/jul/oct) ni el bimestral (sep/nov/ene…); al cerrar, en enero tocan los tres
+    print('\n== Frecuencia: cierre de mes y respaldo')
+    s2 = json.loads(json.dumps(seed)); s2['meta']['schemaVersion'] = 2
+    s2['config']['gastos'][1].update(frecuencia='trimestral', mesPago=0); s2['config']['gastos'][2].update(frecuencia='bimestral', mesPago=8)
+    s2['config']['gastos'][0].update(frecuencia='mensual', mesPago=None)
+    s2['current']['mesLabel'] = 'Diciembre 2026'
+    ctx, page, errs = new_page(b, 390, 844, seed=s2, fecha='2026-12-10T10:00:00')
+    check(page.evaluate('totals().nFijos') == 1, 'diciembre: solo toca el mensual')
+    page.click('#close-mobile'); page.wait_for_selector('.sheet'); page.click('.sheet button[type=submit]'); page.wait_for_timeout(300)
+    check(get(page, 'current')['mesLabel'] == 'Enero 2027' and page.evaluate('totals().nFijos') == 3, 'enero: tocan el mensual, el trimestral y el bimestral')
+    check(get(page, 'history')[0]['gastos'] == 20000, 'el historial de diciembre solo sumó lo que tocaba')
+    # Restaurar un respaldo del esquema 1 (pegado)
+    rsp = json.dumps({'version': 2, 'schemaVersion': 1, 'config': seed['config'], 'current': seed['current'], 'history': []})
+    page.click('.appbar [data-act=menu]'); page.click('.menu-item[data-run=pegar]'); page.wait_for_selector('.sheet textarea')
+    page.fill('.sheet textarea', rsp); page.click('.sheet button[type=submit]'); page.wait_for_timeout(400)
+    check(all(x['frecuencia'] == 'mensual' for x in get(page, 'config')['gastos']), 'respaldo del esquema 1 restaurado queda mensual')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -1243,6 +1333,7 @@ with sync_playwright() as pw:
     gcal(b)
     notif(b)
     anticipo(b)
+    frecuencia(b)
     primera_vez(b)
     b.close()
 
