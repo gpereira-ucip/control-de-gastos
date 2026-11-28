@@ -73,6 +73,13 @@ Abre el archivo local (file://), en 390x844 y 1280x900, claro y oscuro, y verifi
     Deshacer) y «Se debitaron todos»; antes del día el aviso dice «Se debita mañana»; etiquetas en las filas;
     calendario con estado «a confirmar»; otro mes sin pregunta; se recuerda al recargar; el mes nuevo arranca sin
     «No se debitó»; contraste AA; 390 claro y 1280 oscuro
+  - (v2.9) orden de los gastos fijos (fecha fija 15/11/2026): «Manual» por defecto (orden de config); hoja «Orden»
+    con 5 opciones; vencimiento (sin día al final; los que no tocan, por próximo pago), monto (real o estimado, de
+    mayor a menor), nombre (A-Z) y categoría; con filtro «Pendientes»; se guarda en meta.orden y se recuerda al
+    recargar; «Cancelar» no cambia; valor inválido → manual; «Reordenar» con flechas ↑ ↓ (clic y teclado) cambia el
+    orden de config.gastos sin perder nada, primera/última flecha deshabilitadas, foco que sigue al gasto, mensaje
+    de estado, se guarda en IndexedDB, «Listo» vuelve a la lista; salir con otra pestaña; opción en el menú; con
+    un solo gasto no aparece; contraste AA; 390 claro y 1280 oscuro
 Sale con código 1 si algo falla. Ampliar en cada corrida con lo nuevo.
 """
 import json, os, sys, pathlib
@@ -1460,6 +1467,108 @@ def debito(b):
     check(all(x['debito'] == (x['id'] != 'gd') for x in get(page, 'config')['gastos']), 'el débito sigue configurado en el mes nuevo')
     check(not errs, f'sin errores {errs}'); ctx.close()
 
+def orden(b):
+    get = lambda page, k: page.evaluate(f"JSON.parse(localStorage.getItem('{P}{k}'))")
+    def g(i, n, m, c, v, frec='mensual', mp=None):
+        return {'id': i, 'nombre': n, 'estimado': m, 'categoria': c, 'vence': v, 'nota': '', 'frecuencia': frec, 'mesPago': mp, 'debito': False}
+    gs = [g('ga', 'Luz de prueba', 20000, 'servicios', 20), g('gb', 'Alquiler de prueba', 300000, 'hogar', 1),
+          g('gc', 'Agua de prueba', 9000, 'servicios', ''), g('gd', 'Colegio de prueba', 80000, 'educacion', 5),
+          g('ge', 'Seguro de prueba', 120000, 'transporte', 10, 'anual', 2), g('gf', 'Patente de prueba', 40000, 'transporte', 15, 'semestral', 0)]
+    def seed(gs, meta_extra=None):
+        cur = {x['id']: {'real': '', 'pagado': False} for x in gs}
+        if 'ga' in cur: cur['ga']['real'] = 95000
+        if 'gd' in cur: cur['gd']['pagado'] = True
+        meta = {'schemaVersion': 3, 'appVersion': '2.8', 'vistoNovedades': ['2.9'], 'respaldo': {'ultimo': 1795000000000, 'base': 0, 'pospuesto': None}}
+        meta.update(meta_extra or {})
+        return {'config': {'ingresos': [{'id': 'i1', 'nombre': 'Empleo A', 'estimado': 900000, 'nota': ''}], 'gastos': gs},
+                'current': {'mesLabel': 'Noviembre 2026', 'gastos': cur, 'ingresos': {'i1': {'real': '', 'cobrado': False}}, 'movimientos': []},
+                'history': [], 'meta': meta}
+    F = '2026-11-15T10:00:00'
+    lista = lambda page: page.evaluate("[...document.querySelectorAll('#app .card .row[data-key^=g-]:not(.is-off)')].map(e=>e.dataset.key.slice(2))")
+    fuera = lambda page: page.evaluate("[...document.querySelectorAll('#app .card .row.is-off[data-key^=g-]')].map(e=>e.dataset.key.slice(2))")
+    reord = lambda page: page.evaluate("[...document.querySelectorAll('#app .reord-row')].map(e=>e.dataset.key.slice(2))")
+    ids = lambda page: [x['id'] for x in get(page, 'config')['gastos']]
+    def elegir(page, k):
+        page.click('#app [data-act=orden]'); page.wait_for_selector('.sheet [name=orden]')
+        page.check(f'.sheet [name=orden][value={k}]'); page.click('.sheet button[type=submit]'); page.wait_for_timeout(300)
+    esperado = {'manual': (['ga', 'gb', 'gc', 'gd'], ['ge', 'gf']), 'vence': (['gb', 'gd', 'ga', 'gc'], ['gf', 'ge']),
+                'monto': (['gb', 'ga', 'gd', 'gc'], ['ge', 'gf']), 'nombre': (['gc', 'gb', 'gd', 'ga'], ['gf', 'ge']),
+                'categoria': (['gd', 'gb', 'gc', 'ga'], ['gf', 'ge'])}
+    for w, h, theme in [(390, 844, 'light'), (1280, 900, 'dark')]:
+        label = f'orden {w} {theme}'
+        print(f'\n== Orden de gastos fijos (v2.9) {label}')
+        ctx, page, errs = new_page(b, w, h, theme=theme, seed=seed(gs), fecha=F)
+        cfg0 = get(page, 'config'); cur0 = get(page, 'current')
+        page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+        check(page.locator('#app .orden-bar').count() == 1 and 'Manual' in page.inner_text('#app .orden-btn'), f'{label}: barra de orden con «Manual» por defecto')
+        check((lista(page), fuera(page)) == esperado['manual'], f'{label}: manual = orden guardado {lista(page)} {fuera(page)}')
+        page.click('#app [data-act=orden]'); page.wait_for_selector('.sheet [name=orden]')
+        check(page.locator('.sheet [name=orden]').count() == 5 and page.is_checked('.sheet [name=orden][value=manual]'), f'{label}: hoja con 5 opciones y la actual marcada')
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en la hoja {malos[:3]}')
+        page.screenshot(path=str(SHOTS / f'orden-hoja-{w}-{theme}.png'))
+        page.check('.sheet [name=orden][value=monto]'); page.click('.sheet .btn.ghost:has-text("Cancelar")'); page.wait_for_timeout(300)
+        check(lista(page) == esperado['manual'][0] and 'orden' not in get(page, 'meta'), f'{label}: «Cancelar» no cambia nada')
+        for k in ['vence', 'monto', 'nombre', 'categoria']:
+            elegir(page, k)
+            check((lista(page), fuera(page)) == esperado[k], f'{label}: orden {k} {lista(page)} {fuera(page)}')
+            check(get(page, 'meta').get('orden') == {'modo': k} and k.replace('categoria', 'Categoría').replace('vence', 'Vencimiento').capitalize()[:4] in page.inner_text('#app .orden-btn'), f'{label}: {k} guardado y visible en el botón')
+        check(get(page, 'config') == cfg0 and get(page, 'current') == cur0, f'{label}: ordenar no toca los datos')
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA en la lista {malos[:3]}')
+        no_hscroll(page, w, label)
+        page.screenshot(path=str(SHOTS / f'orden-lista-{w}-{theme}.png'), full_page=True)
+        page.click('[data-act=filtro][data-f=pend]'); page.wait_for_timeout(150)
+        check(lista(page) == ['gb', 'gc', 'ga'] and fuera(page) == [], f'{label}: con «Pendientes» respeta el orden {lista(page)}')
+        page.click('[data-act=filtro][data-f=todos]'); page.wait_for_timeout(150)
+        page.reload(); page.wait_for_selector('.hero'); page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+        check(lista(page) == esperado['categoria'][0], f'{label}: se recuerda al recargar')
+        # Reordenar
+        page.click('#app [data-act=reordenar]'); page.wait_for_timeout(300)
+        check(reord(page) == ids(page) == ['ga', 'gb', 'gc', 'gd', 'ge', 'gf'] and get(page, 'meta')['orden'] == {'modo': 'manual'}, f'{label}: «Reordenar» muestra todos en el orden guardado y pasa a manual')
+        check(page.is_disabled('[data-act=mover][data-id=ga][data-f="-1"]') and page.is_disabled('[data-act=mover][data-id=gf][data-f="1"]') and page.locator('#app .mv:not([disabled])').count() == 10, f'{label}: primera y última flecha deshabilitadas')
+        malos = page.evaluate(AUDIT_JS)
+        check(not malos, f'{label}: contraste AA al reordenar {malos[:3]}')
+        no_hscroll(page, w, label + ' reordenar')
+        page.click('[data-act=mover][data-id=ga][data-f="1"]'); page.wait_for_timeout(300)
+        check(ids(page) == ['gb', 'ga', 'gc', 'gd', 'ge', 'gf'] and reord(page) == ids(page), f'{label}: bajar con clic guarda {ids(page)}')
+        check('Luz de prueba quedó en el lugar 2 de 6' in page.inner_text('#reord-estado'), f'{label}: mensaje de estado')
+        page.focus('[data-act=mover][data-id=ga][data-f="1"]'); page.keyboard.press('Enter'); page.wait_for_timeout(300)
+        check(ids(page)[2] == 'ga' and page.evaluate("document.activeElement.matches('[data-act=mover][data-id=ga][data-f=\"1\"]')"), f'{label}: con teclado y el foco sigue al gasto')
+        for _ in range(2):
+            page.click('[data-act=mover][data-id=ga][data-f="-1"]'); page.wait_for_timeout(300)
+        check(ids(page)[0] == 'ga' and page.evaluate("document.activeElement.matches('[data-act=mover][data-id=ga][data-f=\"1\"]')"), f'{label}: al llegar arriba el foco pasa a «Bajar»')
+        page.click('[data-act=mover][data-id=gf][data-f="-1"]'); page.wait_for_timeout(300)
+        nuevo = ['ga', 'gb', 'gc', 'gd', 'gf', 'ge']
+        check(ids(page) == nuevo, f'{label}: subir el último {ids(page)}')
+        idb = page.evaluate("new Promise(r=>{const q=indexedDB.open('control-mensual');q.onsuccess=()=>{const t=q.result.transaction('kv').objectStore('kv').get('config');t.onsuccess=()=>{r(JSON.parse(t.result).gastos.map(x=>x.id));q.result.close();};};})")
+        check(idb == nuevo, f'{label}: el nuevo orden está en IndexedDB')
+        cfg1 = get(page, 'config')
+        check(sorted(cfg1['gastos'], key=lambda x: x['id']) == sorted(cfg0['gastos'], key=lambda x: x['id']) and get(page, 'current') == cur0, f'{label}: reordenar no pierde ni cambia ningún gasto')
+        page.screenshot(path=str(SHOTS / f'orden-reordenar-{w}-{theme}.png'), full_page=True)
+        page.click('#app .card-h [data-act=reordenar-fin]'); page.wait_for_timeout(300)
+        check(page.locator('#app .reord-row').count() == 0 and lista(page) == ['ga', 'gb', 'gc', 'gd'] and fuera(page) == ['gf', 'ge'] and 'Manual' in page.inner_text('#app .orden-btn'), f'{label}: «Listo» vuelve a la lista en el orden nuevo')
+        page.reload(); page.wait_for_selector('.hero'); page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+        check(fuera(page) == ['gf', 'ge'], f'{label}: el orden manual se recuerda al recargar')
+        page.click('#app [data-act=reordenar]'); page.wait_for_timeout(200)
+        page.click('.nav [data-tab=resumen]'); page.wait_for_timeout(150); page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+        check(page.locator('#app .reord-row').count() == 0, f'{label}: cambiar de pestaña sale de «Reordenar»')
+        check(not errs, f'{label}: sin errores {errs}'); ctx.close()
+    print('\n== Orden: menú, valor inválido y un solo gasto')
+    ctx, page, errs = new_page(b, 390, 844, seed=seed(gs, {'orden': {'modo': 'cualquiera'}}), fecha=F)
+    check(page.evaluate('ui.orden') == 'manual', 'valor inválido → manual')
+    page.click('.appbar [data-act=menu]'); page.wait_for_selector('.sheet [data-run=orden]')
+    check('Orden: manual' in page.inner_text('.sheet [data-run=orden]'), 'opción en el menú con el orden actual')
+    page.click('.sheet [data-run=orden]'); page.wait_for_selector('.sheet [name=orden]'); page.wait_for_timeout(300)
+    check(page.evaluate('ui.tab') == 'fijos' and page.locator('.sheet [name=orden]').count() == 5, 'el menú lleva a Gastos fijos y abre la hoja')
+    page.click('.sheet #ord-manual'); page.wait_for_timeout(400)
+    check(page.locator('#app .reord-row').count() == 6, '«Reordenar a mano» desde la hoja')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+    ctx, page, errs = new_page(b, 390, 844, seed=seed([gs[0]]), fecha=F)
+    page.click('.nav [data-tab=fijos]'); page.wait_for_timeout(150)
+    check(page.locator('#app .orden-bar').count() == 0, 'con un solo gasto no aparece la barra de orden')
+    check(not errs, f'sin errores {errs}'); ctx.close()
+
 def primera_vez(b):
     print('\n== Primera vez (sin datos)')
     ctx, page, errs = new_page(b, 390, 844, seed={})
@@ -1494,6 +1603,7 @@ with sync_playwright() as pw:
     frecuencia(b)
     provision(b)
     debito(b)
+    orden(b)
     primera_vez(b)
     b.close()
 
